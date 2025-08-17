@@ -5,6 +5,7 @@
 // The hook returns the map instance, a loading state, and the current markers on the map.
 // It also listens for changes in the selected place and updates the map accordingly.
 // Fixed useGoogleMaps.js - Resolves DOM timing issues
+// Fixed useGoogleMaps.js - Replace your ENTIRE src/hooks/useGoogleMaps.js with this
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import { googleMapsService } from '../services/googleMapsService';
@@ -15,78 +16,47 @@ export const useGoogleMaps = (containerId) => {
   const [error, setError] = useState(null);
   const markersRef = useRef([]);
   const initializationAttempted = useRef(false);
-  const retryTimeoutRef = useRef(null);
   
   const { selectedPlace } = useSelector(state => state.places);
 
-  // Enhanced element waiting with better DOM checking
-  const waitForElement = useCallback((elementId) => {
-    return new Promise((resolve, reject) => {
-      let attempts = 0;
-      const maxAttempts = 150; // 15 seconds with 100ms intervals
-      
-      const checkElement = () => {
-        attempts++;
-        const element = document.getElementById(elementId);
-        
-        if (element && element.offsetParent !== null) {
-          // Element exists and is visible/rendered
-          console.log(`✅ useGoogleMaps: Element found after ${attempts} attempts:`, element);
-          resolve(element);
-          return;
-        }
-        
-        if (attempts >= maxAttempts) {
-          reject(new Error(`Element with id '${elementId}' not found after ${attempts} attempts (${attempts * 100}ms)`));
-          return;
-        }
-        
-        console.log(`⏳ useGoogleMaps: Attempt ${attempts}/${maxAttempts} - Element not ready, retrying...`);
-        setTimeout(checkElement, 100);
-      };
-      
-      // Start checking immediately
-      checkElement();
-    });
-  }, []);
-
   // Reset function for retries
   const resetInitialization = useCallback(() => {
+    console.log('🔄 useGoogleMaps: Resetting initialization');
     initializationAttempted.current = false;
     setError(null);
     setIsLoaded(false);
-    if (retryTimeoutRef.current) {
-      clearTimeout(retryTimeoutRef.current);
-    }
+    setMap(null);
   }, []);
 
+  // Simplified initialization - element should always exist now
   const initMap = useCallback(async () => {
-    // Prevent multiple initialization attempts
     if (initializationAttempted.current) {
-      console.log('🛑 useGoogleMaps: Initialization already attempted, skipping...');
+      console.log('🛑 useGoogleMaps: Already attempted, skipping');
       return;
     }
     
     console.log('🗺️ useGoogleMaps: Starting map initialization...');
-    console.log('🗺️ useGoogleMaps: Looking for element:', containerId);
+    initializationAttempted.current = true;
     
     try {
-      initializationAttempted.current = true;
+      // Check if element exists
+      const element = document.getElementById(containerId);
+      if (!element) {
+        throw new Error(`Element with id '${containerId}' not found`);
+      }
       
-      // Step 1: Wait for DOM element to be ready
-      await waitForElement(containerId);
+      console.log('✅ useGoogleMaps: Element found:', element);
+      console.log('✅ useGoogleMaps: Element dimensions:', {
+        width: element.offsetWidth,
+        height: element.offsetHeight,
+        visible: element.offsetWidth > 0 && element.offsetHeight > 0
+      });
       
-      // Step 2: Initialize Google Maps API
+      // Initialize Google Maps API
       console.log('🚀 useGoogleMaps: Initializing Google Maps API...');
       await googleMapsService.initialize();
       
-      // Step 3: Verify element still exists after API initialization
-      const element = document.getElementById(containerId);
-      if (!element) {
-        throw new Error(`Element '${containerId}' disappeared during initialization`);
-      }
-      
-      // Step 4: Create map instance
+      // Create map instance
       console.log('🗺️ useGoogleMaps: Creating map instance...');
       const mapInstance = googleMapsService.createMap(containerId);
       
@@ -94,7 +64,7 @@ export const useGoogleMaps = (containerId) => {
         throw new Error('Failed to create map instance');
       }
       
-      console.log('✅ useGoogleMaps: Map created successfully');
+      console.log('✅ useGoogleMaps: Map created successfully!');
       setMap(mapInstance);
       setIsLoaded(true);
       setError(null);
@@ -104,37 +74,19 @@ export const useGoogleMaps = (containerId) => {
       setError(error.message);
       setIsLoaded(false);
       initializationAttempted.current = false; // Allow retry
-      
-      // Auto-retry after 3 seconds if it's a timing issue
-      if (error.message.includes('not found') || error.message.includes('disappeared')) {
-        console.log('🔄 useGoogleMaps: Scheduling retry in 3 seconds...');
-        retryTimeoutRef.current = setTimeout(() => {
-          if (!map && containerId) {
-            console.log('🔄 useGoogleMaps: Retrying initialization...');
-            initMap();
-          }
-        }, 3000);
-      }
     }
-  }, [containerId, map, waitForElement]);
+  }, [containerId]);
 
   // Main initialization effect
   useEffect(() => {
     if (containerId && !map && !initializationAttempted.current) {
-      // Use requestAnimationFrame to ensure DOM is fully ready
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          initMap();
-        }, 50); // Small delay to ensure complete DOM rendering
-      });
+      // Give a moment for the element to be fully rendered
+      const timer = setTimeout(() => {
+        initMap();
+      }, 200);
+      
+      return () => clearTimeout(timer);
     }
-
-    // Cleanup timeout on unmount
-    return () => {
-      if (retryTimeoutRef.current) {
-        clearTimeout(retryTimeoutRef.current);
-      }
-    };
   }, [containerId, map, initMap]);
 
   // Handle selected place changes
@@ -169,7 +121,6 @@ export const useGoogleMaps = (containerId) => {
   // Cleanup effect
   useEffect(() => {
     return () => {
-      // Clear all markers on unmount
       markersRef.current.forEach(marker => marker.setMap(null));
       markersRef.current = [];
     };

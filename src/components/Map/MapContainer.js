@@ -9,6 +9,8 @@
 // Complete MapContainer.js - CRITICAL: This file must be updated for the fix to work
 // Complete MapContainer.js Solution - Replace your entire file with this
 // Complete MapContainer.js Solution - Replace your entire src/components/Map/MapContainer.js with this
+// FIXED MapContainer.js - Solves the chicken-and-egg problem
+// Replace your ENTIRE src/components/Map/MapContainer.js with this
 import React, { useEffect, useState, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import { useGoogleMaps } from '../../hooks/useGoogleMaps';
@@ -16,7 +18,7 @@ import LoadingSpinner from '../common/LoadingSpinner';
 
 const MapContainer = () => {
   const [mapError, setMapError] = useState(null);
-  const [domReady, setDomReady] = useState(false);
+  const [isElementReady, setIsElementReady] = useState(false);
   const mapContainerRef = useRef(null);
   const { selectedPlace } = useSelector(state => state.places);
   const { mapLoading } = useSelector(state => state.ui);
@@ -24,12 +26,12 @@ const MapContainer = () => {
   // Get error and reset function from the hook
   const { isLoaded, error, resetInitialization } = useGoogleMaps('google-map');
 
-  // ENHANCED: Check for both existence AND visibility
+  // FIXED: Check element AFTER it's rendered (not before)
   useEffect(() => {
-    const checkDomReady = () => {
+    // Small delay to ensure the div is in DOM after render
+    const timer = setTimeout(() => {
       const element = document.getElementById('google-map');
       if (element) {
-        // Check multiple visibility conditions
         const isVisible = (
           element.offsetWidth > 0 && 
           element.offsetHeight > 0 && 
@@ -37,37 +39,22 @@ const MapContainer = () => {
           window.getComputedStyle(element).visibility !== 'hidden'
         );
         
-        if (isVisible) {
-          setDomReady(true);
-          console.log('✅ MapContainer: DOM element is ready and visible');
-          console.log('Element dimensions:', {
-            width: element.offsetWidth,
-            height: element.offsetHeight,
-            display: window.getComputedStyle(element).display,
-            visibility: window.getComputedStyle(element).visibility
-          });
-        } else {
-          console.log('⏳ MapContainer: Element exists but not visible yet', {
-            width: element.offsetWidth,
-            height: element.offsetHeight,
-            display: window.getComputedStyle(element).display,
-            visibility: window.getComputedStyle(element).visibility
-          });
-          setTimeout(checkDomReady, 100);
-        }
+        setIsElementReady(isVisible);
+        console.log('🔍 MapContainer: Element check:', {
+          exists: !!element,
+          visible: isVisible,
+          width: element.offsetWidth,
+          height: element.offsetHeight,
+          display: window.getComputedStyle(element).display,
+          visibility: window.getComputedStyle(element).visibility
+        });
       } else {
-        console.log('⏳ MapContainer: Element not found yet');
-        setTimeout(checkDomReady, 100);
+        console.log('❌ MapContainer: Element still not found after render');
       }
-    };
+    }, 100);
 
-    // Multiple attempts to ensure proper timing
-    requestAnimationFrame(() => {
-      setTimeout(() => {
-        checkDomReady();
-      }, 100);
-    });
-  }, []);
+    return () => clearTimeout(timer);
+  }, []); // Run once after initial render
 
   // Handle map errors
   useEffect(() => {
@@ -94,20 +81,15 @@ const MapContainer = () => {
   const handleRetry = () => {
     console.log('🔄 MapContainer: User triggered retry');
     setMapError(null);
+    setIsElementReady(false);
     resetInitialization();
     
-    // Force re-render of the map element
-    setDomReady(false);
+    // Re-check element after retry
     setTimeout(() => {
-      const checkDomReady = () => {
-        const element = document.getElementById('google-map');
-        if (element && element.offsetWidth > 0 && element.offsetHeight > 0) {
-          setDomReady(true);
-        } else {
-          setTimeout(checkDomReady, 100);
-        }
-      };
-      checkDomReady();
+      const element = document.getElementById('google-map');
+      if (element && element.offsetWidth > 0 && element.offsetHeight > 0) {
+        setIsElementReady(true);
+      }
     }, 100);
   };
 
@@ -116,7 +98,7 @@ const MapContainer = () => {
     window.location.reload();
   };
 
-  // Enhanced error display with more debugging info
+  // Show error state
   if (mapError) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-gray-100 rounded-lg">
@@ -152,56 +134,10 @@ const MapContainer = () => {
     );
   }
 
-  // Enhanced loading state with debug info
-  if (!isLoaded || mapLoading || !domReady) {
-    return (
-      <div className="w-full h-full flex items-center justify-center bg-gray-100 rounded-lg">
-        <div className="text-center">
-          <LoadingSpinner size="lg" />
-          <div className="mt-4 text-gray-600">
-            {!domReady ? 'Preparing map container...' :
-             mapLoading ? 'Processing map data...' : 
-             'Loading Google Maps...'}
-          </div>
-          <div className="mt-2 text-sm text-gray-500">
-            {!domReady ? 'Setting up DOM elements' :
-             'This may take a few moments'}
-          </div>
-          
-          {/* Debug info */}
-          <div className="mt-2 text-xs text-gray-400">
-            DOM Ready: {domReady ? '✅' : '❌'} | 
-            Map Loaded: {isLoaded ? '✅' : '❌'} | 
-            Loading: {mapLoading ? '⏳' : '✅'}
-          </div>
-          
-          {/* Progress indicator */}
-          <div className="mt-4 w-48 mx-auto">
-            <div className="bg-gray-200 rounded-full h-2">
-              <div 
-                className="bg-blue-500 h-2 rounded-full transition-all duration-500"
-                style={{ 
-                  width: !domReady ? '20%' : mapLoading ? '60%' : '90%' 
-                }}
-              />
-            </div>
-          </div>
-          
-          {/* Manual retry button during loading */}
-          <button 
-            onClick={handleRetry}
-            className="mt-4 px-3 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600"
-          >
-            Force Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-
+  // ALWAYS render the map container div - no conditional rendering!
   return (
     <div className="relative w-full h-full">
-      {/* ENHANCED: Map container with explicit sizing and visibility */}
+      {/* ALWAYS RENDER: Map container div - this fixes the chicken-and-egg problem */}
       <div 
         ref={mapContainerRef}
         id="google-map"
@@ -212,16 +148,61 @@ const MapContainer = () => {
           width: '100%',
           position: 'relative',
           overflow: 'hidden',
-          display: 'block', // Explicitly set display
-          visibility: 'visible' // Explicitly set visibility
+          display: 'block',
+          visibility: 'visible'
         }}
         data-testid="google-map-container"
         role="application"
         aria-label="Google Maps"
       />
       
+      {/* Show loading overlay on top of the map div */}
+      {(!isLoaded || mapLoading || !isElementReady) && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 bg-opacity-90 rounded-lg">
+          <div className="text-center">
+            <LoadingSpinner size="lg" />
+            <div className="mt-4 text-gray-600">
+              {!isElementReady ? 'Preparing map container...' :
+               mapLoading ? 'Processing map data...' : 
+               'Loading Google Maps...'}
+            </div>
+            <div className="mt-2 text-sm text-gray-500">
+              {!isElementReady ? 'Setting up DOM elements' :
+               'This may take a few moments'}
+            </div>
+            
+            {/* Debug info */}
+            <div className="mt-2 text-xs text-gray-400">
+              Element Ready: {isElementReady ? '✅' : '❌'} | 
+              Map Loaded: {isLoaded ? '✅' : '❌'} | 
+              Loading: {mapLoading ? '⏳' : '✅'}
+            </div>
+            
+            {/* Progress indicator */}
+            <div className="mt-4 w-48 mx-auto">
+              <div className="bg-gray-200 rounded-full h-2">
+                <div 
+                  className="bg-blue-500 h-2 rounded-full transition-all duration-500"
+                  style={{ 
+                    width: !isElementReady ? '20%' : mapLoading ? '60%' : '90%' 
+                  }}
+                />
+              </div>
+            </div>
+            
+            {/* Manual retry button */}
+            <button 
+              onClick={handleRetry}
+              className="mt-4 px-3 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600"
+            >
+              Force Retry
+            </button>
+          </div>
+        </div>
+      )}
+      
       {/* Selected place info overlay */}
-      {selectedPlace && (
+      {selectedPlace && isLoaded && (
         <div className="absolute bottom-4 left-4 right-4 bg-white rounded-lg shadow-lg p-4 max-w-sm z-10">
           <div className="flex items-start justify-between">
             <div className="flex-1">
@@ -255,6 +236,7 @@ const MapContainer = () => {
         </div>
       )}
       
+      {/* Map controls */}
       <div className="absolute top-4 right-4 z-10">
         <div className="bg-white rounded-lg shadow-md p-2">
           <button 
