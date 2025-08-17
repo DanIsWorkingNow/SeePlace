@@ -1,17 +1,28 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import './index.css';
-import App from './App';
-import reportWebVitals from './reportWebVitals';
+// This file is part of the Redux store setup for a Google Places application using Redux Saga.
+import { configureStore } from '@reduxjs/toolkit';
+import createSagaMiddleware from 'redux-saga';
+import placesReducer from './slices/placesSlice';
+import uiReducer from './slices/uiSlice';
+import rootSaga from './sagas/rootSaga';
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+const sagaMiddleware = createSagaMiddleware();
 
-// If you want to start measuring performance in your app, pass a function
-// to log results (for example: reportWebVitals(console.log))
-// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
-reportWebVitals();
+export const store = configureStore({
+  reducer: {
+    places: placesReducer,
+    ui: uiReducer
+  },
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      thunk: false,
+      serializableCheck: {
+        ignoredActions: ['persist/PERSIST']
+      }
+    }).concat(sagaMiddleware)
+});
+
+sagaMiddleware.run(rootSaga);
+
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
+// This file sets up the Redux store with slices for places and UI state, and integrates Redux Saga for side effects.
