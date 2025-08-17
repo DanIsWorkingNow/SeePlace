@@ -3,205 +3,250 @@
 // It provides methods for searching places, getting place details, creating maps, and adding markers.
 // The service uses the Google Maps JavaScript API and is initialized with an API key.  
 // Enhanced googleMapsService.js - Better error handling and validation
+// Enhanced googleMapsService.js - Fixed initialization issues
 import { Loader } from '@googlemaps/js-api-loader';
 
 class GoogleMapsService {
   constructor() {
+    // Validate API key on construction
+    const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      console.error('❌ GoogleMapsService: API key not found in environment variables');
+      throw new Error('Google Maps API key not found. Please check your .env file.');
+    }
+
     this.loader = new Loader({
-      apiKey: process.env.REACT_APP_GOOGLE_MAPS_API_KEY,
+      apiKey: apiKey,
       version: 'weekly',
       libraries: ['places', 'geometry']
     });
+    
     this.google = null;
     this.autocompleteService = null;
     this.placesService = null;
     this.isInitialized = false;
+    this.initializationPromise = null;
+    
+    console.log('🚀 GoogleMapsService: Constructor completed');
   }
 
   async initialize() {
+    // If already initialized, return immediately
     if (this.isInitialized && this.google) {
-      console.log('✅ GoogleMapsService: Already initialized');
+      console.log('✅ GoogleMapsService: Already initialized, returning existing instance');
       return this.google;
     }
 
-    try {
-      // Validate API key
-      if (!process.env.REACT_APP_GOOGLE_MAPS_API_KEY) {
-        throw new Error('Google Maps API key not found. Please check your .env file.');
-      }
+    // If initialization is in progress, wait for it
+    if (this.initializationPromise) {
+      console.log('⏳ GoogleMapsService: Initialization in progress, waiting...');
+      return this.initializationPromise;
+    }
 
-      console.log('🚀 GoogleMapsService: Loading Google Maps API...');
-      this.google = await this.loader.load();
+    // Start new initialization
+    this.initializationPromise = this._performInitialization();
+    return this.initializationPromise;
+  }
+
+  async _performInitialization() {
+    try {
+      console.log('🚀 GoogleMapsService: Starting Google Maps API initialization...');
       
+      // Load Google Maps API
+      this.google = await this.loader.load();
       console.log('✅ GoogleMapsService: Google Maps API loaded successfully');
+      
+      // Initialize services
       this.autocompleteService = new this.google.maps.places.AutocompleteService();
+      console.log('✅ GoogleMapsService: AutocompleteService created');
+      
       this.isInitialized = true;
+      console.log('🎉 GoogleMapsService: Initialization complete!');
       
       return this.google;
     } catch (error) {
-      console.error('❌ GoogleMapsService: Failed to initialize:', error);
+      console.error('❌ GoogleMapsService: Initialization failed:', error);
       this.isInitialized = false;
-      throw new Error(`Failed to load Google Maps: ${error.message}`);
+      this.initializationPromise = null;
+      
+      // Provide helpful error messages
+      let userFriendlyMessage = 'Failed to load Google Maps';
+      
+      if (error.message.includes('API key')) {
+        userFriendlyMessage = 'Invalid Google Maps API key. Please check your configuration.';
+      } else if (error.message.includes('network')) {
+        userFriendlyMessage = 'Network error. Please check your internet connection.';
+      } else if (error.message.includes('quota')) {
+        userFriendlyMessage = 'Google Maps quota exceeded. Please check your billing account.';
+      }
+      
+      throw new Error(userFriendlyMessage);
     }
   }
 
   async searchPlaces(query) {
-    await this.initialize();
-    
-    return new Promise((resolve, reject) => {
-      if (!query || query.length < 2) {
-        resolve([]);
-        return;
+    try {
+      console.log(`🔍 GoogleMapsService: Searching for "${query}"`);
+      
+      // Validate input
+      if (!query || typeof query !== 'string' || query.length < 2) {
+        console.log('📝 GoogleMapsService: Query too short, returning empty results');
+        return [];
       }
 
+      // Ensure service is initialized
+      await this.initialize();
+      
       if (!this.autocompleteService) {
-        reject(new Error('Autocomplete service not initialized'));
-        return;
+        throw new Error('AutocompleteService not available after initialization');
       }
 
-      this.autocompleteService.getPlacePredictions(
-        {
-          input: query,
-          types: ['establishment', 'geocode'],
-          componentRestrictions: { country: 'my' }
-        },
-        (predictions, status) => {
-          if (status === this.google.maps.places.PlacesServiceStatus.OK) {
-            resolve(predictions || []);
-          } else if (status === this.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-            resolve([]);
-          } else {
-            reject(new Error(`Places API error: ${status}`));
+      return new Promise((resolve, reject) => {
+        console.log('🌐 GoogleMapsService: Making Places API request...');
+        
+        this.autocompleteService.getPlacePredictions(
+          {
+            input: query,
+            types: ['establishment', 'geocode'],
+            componentRestrictions: { country: 'my' } // Malaysia
+          },
+          (predictions, status) => {
+            console.log(`📊 GoogleMapsService: API Response - Status: ${status}`);
+            
+            if (status === this.google.maps.places.PlacesServiceStatus.OK) {
+              console.log(`✅ GoogleMapsService: Found ${predictions?.length || 0} predictions`);
+              resolve(predictions || []);
+            } else if (status === this.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+              console.log('📭 GoogleMapsService: No results found');
+              resolve([]);
+            } else {
+              console.error(`❌ GoogleMapsService: API Error - Status: ${status}`);
+              reject(new Error(`Places API error: ${status}`));
+            }
           }
-        }
-      );
-    });
+        );
+      });
+    } catch (error) {
+      console.error('❌ GoogleMapsService: Search error:', error);
+      throw error;
+    }
   }
 
   async getPlaceDetails(placeId) {
-    await this.initialize();
-    
-    return new Promise((resolve, reject) => {
+    try {
+      console.log(`🏢 GoogleMapsService: Getting details for place ID: ${placeId}`);
+      
       if (!placeId) {
-        reject(new Error('Place ID is required'));
-        return;
+        throw new Error('Place ID is required');
       }
 
-      const div = document.createElement('div');
-      this.placesService = new this.google.maps.places.PlacesService(div);
-      
-      this.placesService.getDetails(
-        {
-          placeId: placeId,
-          fields: ['name', 'geometry', 'formatted_address', 'place_id', 'types', 'photos']
-        },
-        (place, status) => {
-          if (status === this.google.maps.places.PlacesServiceStatus.OK) {
-            resolve(place);
-          } else {
-            reject(new Error(`Place details error: ${status}`));
+      await this.initialize();
+
+      return new Promise((resolve, reject) => {
+        // Create a temporary div for PlacesService (required by Google API)
+        const div = document.createElement('div');
+        const placesService = new this.google.maps.places.PlacesService(div);
+        
+        placesService.getDetails(
+          {
+            placeId: placeId,
+            fields: ['name', 'geometry', 'formatted_address', 'place_id', 'types', 'photos', 'rating', 'user_ratings_total']
+          },
+          (place, status) => {
+            if (status === this.google.maps.places.PlacesServiceStatus.OK) {
+              console.log('✅ GoogleMapsService: Place details retrieved successfully');
+              resolve(place);
+            } else {
+              console.error(`❌ GoogleMapsService: Place details error - Status: ${status}`);
+              reject(new Error(`Place details error: ${status}`));
+            }
           }
-        }
-      );
-    });
+        );
+      });
+    } catch (error) {
+      console.error('❌ GoogleMapsService: Place details error:', error);
+      throw error;
+    }
   }
 
-  createMap(elementId, center = { lat: 3.1390, lng: 101.6869 }) {
-    if (!this.google) {
-      throw new Error('Google Maps API not initialized');
-    }
-
-    // Validate element exists
-    const element = document.getElementById(elementId);
-    if (!element) {
-      throw new Error(`Element with id '${elementId}' not found`);
-    }
-
-    // Check if element is in the DOM and visible
-    if (!element.offsetParent && element.style.display !== 'none') {
-      console.warn('⚠️ GoogleMapsService: Element may not be visible');
-    }
-
+  async createMap(elementId, center = { lat: 3.1390, lng: 101.6869 }) {
     try {
-      console.log('🗺️ GoogleMapsService: Creating map on element:', element);
+      console.log(`🗺️ GoogleMapsService: Creating map for element: ${elementId}`);
       
-      const mapOptions = {
+      await this.initialize();
+      
+      const element = document.getElementById(elementId);
+      if (!element) {
+        throw new Error(`Element with id '${elementId}' not found`);
+      }
+
+      const map = new this.google.maps.Map(element, {
         zoom: 13,
         center: center,
         mapTypeControl: false,
         streetViewControl: false,
-        fullscreenControl: true,
-        zoomControl: true,
-        // Additional options for better performance
-        gestureHandling: 'cooperative',
-        backgroundColor: '#f0f0f0',
-        clickableIcons: true,
-        disableDoubleClickZoom: false,
-        draggable: true,
-        keyboardShortcuts: true,
-        scrollwheel: true
-      };
-
-      const map = new this.google.maps.Map(element, mapOptions);
-      
-      // Verify map was created successfully
-      if (!map) {
-        throw new Error('Failed to create map instance');
-      }
+        fullscreenControl: false,
+        styles: [
+          // Optional: Add custom map styling here
+        ]
+      });
 
       console.log('✅ GoogleMapsService: Map created successfully');
       return map;
-      
     } catch (error) {
-      console.error('❌ GoogleMapsService: Failed to create map:', error);
-      throw new Error(`Map creation failed: ${error.message}`);
+      console.error('❌ GoogleMapsService: Map creation error:', error);
+      throw error;
     }
   }
 
   createMarker(map, position, title) {
-    if (!this.google) {
-      throw new Error('Google Maps API not initialized');
-    }
-
-    if (!map) {
-      throw new Error('Map instance is required');
-    }
-
-    if (!position) {
-      throw new Error('Position is required for marker');
-    }
-
     try {
+      if (!map || !position) {
+        throw new Error('Map and position are required for marker creation');
+      }
+
       const marker = new this.google.maps.Marker({
         position: position,
         map: map,
-        title: title || 'Selected Place',
-        animation: this.google.maps.Animation.DROP,
-        optimized: false // Better for custom markers
+        title: title || 'Place Marker',
+        animation: this.google.maps.Animation.DROP
       });
 
-      console.log('📍 GoogleMapsService: Marker created at:', position);
+      console.log('📍 GoogleMapsService: Marker created successfully');
       return marker;
-      
     } catch (error) {
-      console.error('❌ GoogleMapsService: Failed to create marker:', error);
-      throw new Error(`Marker creation failed: ${error.message}`);
+      console.error('❌ GoogleMapsService: Marker creation error:', error);
+      throw error;
     }
   }
 
-  // Utility method to check if Google Maps is ready
+  // Method to check if service is ready
   isReady() {
-    return this.isInitialized && this.google !== null;
+    return this.isInitialized && this.google && this.autocompleteService;
   }
 
-  // Reset the service (useful for testing or error recovery)
-  reset() {
-    this.google = null;
-    this.autocompleteService = null;
-    this.placesService = null;
-    this.isInitialized = false;
-    console.log('🔄 GoogleMapsService: Service reset');
+  // Method to get current status
+  getStatus() {
+    return {
+      isInitialized: this.isInitialized,
+      hasGoogle: !!this.google,
+      hasAutocompleteService: !!this.autocompleteService,
+      hasPlacesService: !!this.placesService
+    };
   }
 }
 
-export const googleMapsService = new GoogleMapsService();
+// Create and export singleton instance
+const googleMapsService = new GoogleMapsService();
+
+// Debug helper - run this in browser console to check service status
+if (typeof window !== 'undefined') {
+  window.debugGoogleMapsService = () => {
+    console.log('🔍 Google Maps Service Debug Info:');
+    console.log('Status:', googleMapsService.getStatus());
+    console.log('Is Ready:', googleMapsService.isReady());
+    console.log('API Key exists:', !!process.env.REACT_APP_GOOGLE_MAPS_API_KEY);
+  };
+}
+
+export { googleMapsService };
