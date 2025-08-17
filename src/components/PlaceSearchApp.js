@@ -3,6 +3,7 @@
 // The component integrates various sub-components such as PlaceAutocomplete, MapContainer, and SearchHistory.  
 // It also includes an ErrorBoundary to catch errors in the component tree.
 // The main layout is styled using Tailwind CSS classes for a responsive design.    
+// Complete PlaceSearchApp.js Solution - Replace your entire src/components/PlaceSearchApp.js with this
 import React from 'react';
 import PlaceAutocomplete from './PlaceAutocomplete/PlaceAutocomplete';
 import MapContainer from './Map/MapContainer';
@@ -33,11 +34,32 @@ const PlaceSearchApp = () => {
             </div>
             
             <div className="lg:col-span-2">
-              <div className="bg-white rounded-lg shadow-md p-6 h-[600px]">
+              {/* ENHANCED: Explicit sizing for map container */}
+              <div 
+                className="bg-white rounded-lg shadow-md p-6"
+                style={{ 
+                  height: '600px',
+                  minHeight: '600px',
+                  display: 'flex',
+                  flexDirection: 'column'
+                }}
+              >
                 <h2 className="text-xl font-semibold text-gray-800 mb-4">
                   Map View
                 </h2>
-                <MapContainer />
+                {/* ENHANCED: Map container with explicit flex growth */}
+                <div 
+                  className="map-container-parent"
+                  style={{ 
+                    flex: 1,
+                    minHeight: '500px',
+                    position: 'relative',
+                    width: '100%',
+                    height: '100%'
+                  }}
+                >
+                  <MapContainer />
+                </div>
               </div>
             </div>
             

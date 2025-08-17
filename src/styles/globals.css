@@ -37,3 +37,26 @@ code {
 .gm-style-iw {
   border-radius: 8px;
 }
+
+/* Google Maps Container Fixes */
+#google-map {
+  min-height: 400px !important;
+  height: 100% !important;
+  width: 100% !important;
+  display: block !important;
+  visibility: visible !important;
+  position: relative !important;
+}
+
+/* Ensure parent containers don't interfere */
+.map-container-parent {
+  height: 100% !important;
+  min-height: 400px !important;
+  position: relative !important;
+}
+
+/* Fix potential Tailwind conflicts */
+.w-full.h-full {
+  width: 100% !important;
+  height: 100% !important;
+}
