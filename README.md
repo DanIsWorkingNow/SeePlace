@@ -68,3 +68,56 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/d
 ### `npm run build` fails to minify
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+
+
+# 🗺️ Google Places Explorer
+
+A modern React application that integrates Google Places Autocomplete with interactive maps, built with Redux Saga for advanced state management.
+
+## ✨ Features
+
+- 🔍 **Real-time Place Search** - Google Places Autocomplete with debounced search
+- 🗺️ **Interactive Maps** - Google Maps integration with place markers
+- 📚 **Search History** - Persistent search history with Redux state management
+- 🎯 **Advanced State Management** - Redux Saga for complex async flows
+- 📱 **Responsive Design** - Mobile-first design with Tailwind CSS
+- ⌨️ **Keyboard Navigation** - Full accessibility support
+- 🔄 **Error Handling** - Comprehensive error boundaries and user feedback
+
+## 🛠️ Tech Stack
+
+### Frontend
+- **React 18** - Modern functional components with hooks
+- **Redux Toolkit** - Simplified Redux state management
+- **Redux Saga** - Advanced async flow control and side effects
+- **Tailwind CSS** - Utility-first CSS framework
+- **Google Maps JavaScript API** - Maps and Places integration
+
+### Patterns & Practices
+- **Functional Components** - Modern React with hooks
+- **Custom Hooks** - Reusable logic with `usePlaces`, `useDebounce`, `useGoogleMaps`
+- **ES6+ Features** - Arrow functions, destructuring, async/await
+- **Error Boundaries** - Robust error handling
+- **Performance Optimization** - Memoization and debouncing
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Node.js 14+ and npm 6+
+- Google Maps API key with Places API enabled
+
+### Installation
+```bash
+# Clone the repository
+git clone https://github.com/your-username/google-places-redux-saga.git
+cd google-places-redux-saga
+
+# Install dependencies
+npm install
+
+# Set up environment variables
+cp .env.example .env
+# Add your Google Maps API key to .env
+
+# Start development server
+npm start
