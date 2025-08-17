@@ -4,14 +4,12 @@
 import { 
   call, 
   put, 
-  takeLatest, 
   takeEvery, 
   delay, 
-  race, 
   take,
   cancel,
   fork,
-  cancelled
+  all
 } from 'redux-saga/effects';
 import { 
   searchPlacesRequest,

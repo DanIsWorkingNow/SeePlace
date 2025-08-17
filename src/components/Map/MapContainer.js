@@ -16,7 +16,7 @@ const MapContainer = () => {
   const { selectedPlace } = useSelector(state => state.places);
   const { mapLoading } = useSelector(state => state.ui);
   
-  const { map, isLoaded } = useGoogleMaps('google-map');
+  const { isLoaded } = useGoogleMaps('google-map');
 
   useEffect(() => {
     const handleMapError = (error) => {

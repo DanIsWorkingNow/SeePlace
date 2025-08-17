@@ -22,7 +22,4 @@ export const store = configureStore({
 });
 
 sagaMiddleware.run(rootSaga);
-
-export type RootState = ReturnType<typeof store.getState>;
-export type AppDispatch = typeof store.dispatch;
 // This file sets up the Redux store with slices for places and UI state, and integrates Redux Saga for side effects.

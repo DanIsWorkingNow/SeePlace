@@ -81,6 +81,10 @@ const PlaceAutocomplete = () => {
         setFocusedIndex(-1);
         inputRef.current?.blur();
         break;
+      
+      default:
+        // Handle any other key presses
+        break;
     }
   };
 

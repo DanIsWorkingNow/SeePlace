@@ -13,7 +13,7 @@ export const useGoogleMaps = (containerId) => {
   const [isLoaded, setIsLoaded] = useState(false);
   const markersRef = useRef([]);
   
-  const { selectedPlace, markers } = useSelector(state => state.places);
+  const { selectedPlace } = useSelector(state => state.places);
 
   useEffect(() => {
     const initMap = async () => {
@@ -53,7 +53,7 @@ export const useGoogleMaps = (containerId) => {
 
   return {
     map,
-    isLoaded,
-    markers: markersRef.current
+    isLoaded
+    // Removed markers from return since it's not used
   };
 };
