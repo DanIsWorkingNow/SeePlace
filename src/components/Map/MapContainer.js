@@ -6,23 +6,48 @@
 // The component also handles loading states and errors related to the map initialization.  
 // The map is displayed within a responsive container, and the selected place's details are shown in an overlay.
 // The component is styled using Tailwind CSS for a modern and responsive design.   
-import React, { useEffect, useState } from 'react';
+// Complete MapContainer.js - CRITICAL: This file must be updated for the fix to work
+import React, { useEffect, useState, useRef } from 'react';
 import { useSelector } from 'react-redux';
 import { useGoogleMaps } from '../../hooks/useGoogleMaps';
 import LoadingSpinner from '../common/LoadingSpinner';
 
 const MapContainer = () => {
   const [mapError, setMapError] = useState(null);
+  const [domReady, setDomReady] = useState(false);
+  const mapContainerRef = useRef(null);
   const { selectedPlace } = useSelector(state => state.places);
   const { mapLoading } = useSelector(state => state.ui);
   
-  // Get error from the hook as well
-  const { isLoaded, error } = useGoogleMaps('google-map');
+  // Get error and reset function from the hook
+  const { isLoaded, error, resetInitialization } = useGoogleMaps('google-map');
 
+  // CRITICAL: Ensure DOM element is ready before hook initialization
   useEffect(() => {
-    const handleMapError = (error) => {
-      console.error('Map error:', error);
-      setMapError('Failed to load map. Please check your API key and internet connection.');
+    const checkDomReady = () => {
+      const element = document.getElementById('google-map');
+      if (element && element.offsetParent !== null) {
+        setDomReady(true);
+        console.log('✅ MapContainer: DOM element is ready');
+      } else {
+        console.log('⏳ MapContainer: DOM element not ready yet');
+        setTimeout(checkDomReady, 50);
+      }
+    };
+
+    // Use requestAnimationFrame to ensure paint has occurred
+    requestAnimationFrame(() => {
+      setTimeout(checkDomReady, 10);
+    });
+  }, []);
+
+  // Handle map errors
+  useEffect(() => {
+    const handleMapError = (event) => {
+      if (event.target.tagName === 'SCRIPT' && event.target.src.includes('maps.googleapis.com')) {
+        console.error('Google Maps script error:', event);
+        setMapError('Failed to load Google Maps. Please check your API key and internet connection.');
+      }
     };
 
     window.addEventListener('error', handleMapError);
@@ -33,42 +58,88 @@ const MapContainer = () => {
   useEffect(() => {
     if (error) {
       setMapError(`Map initialization failed: ${error}`);
+    } else {
+      setMapError(null);
     }
   }, [error]);
+
+  const handleRetry = () => {
+    console.log('🔄 MapContainer: User triggered retry');
+    setMapError(null);
+    resetInitialization();
+    
+    // Force re-render of the map element
+    setDomReady(false);
+    setTimeout(() => {
+      setDomReady(true);
+    }, 100);
+  };
+
+  const handleForceReload = () => {
+    console.log('🔄 MapContainer: Force reloading page');
+    window.location.reload();
+  };
 
   if (mapError) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-gray-100 rounded-lg">
-        <div className="text-center p-6">
+        <div className="text-center p-6 max-w-md">
           <div className="text-red-500 text-4xl mb-4">⚠️</div>
-          <div className="text-gray-600 mb-2">{mapError}</div>
-          <div className="text-sm text-gray-500 mb-4">
-            Check browser console for detailed error messages
+          <div className="text-gray-800 font-semibold mb-2">Map Loading Failed</div>
+          <div className="text-gray-600 mb-4 text-sm">{mapError}</div>
+          
+          <div className="text-xs text-gray-500 mb-4 p-3 bg-gray-50 rounded border-l-4 border-blue-400">
+            <strong>Troubleshooting:</strong><br/>
+            1. Check browser console for detailed errors<br/>
+            2. Verify API key is valid<br/>
+            3. Ensure internet connection is stable<br/>
+            4. Try refreshing the page
           </div>
-          <button 
-            onClick={() => {
-              setMapError(null);
-              window.location.reload();
-            }}
-            className="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-          >
-            Retry
-          </button>
+          
+          <div className="flex gap-2 justify-center">
+            <button 
+              onClick={handleRetry}
+              className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors text-sm"
+            >
+              Retry Map
+            </button>
+            <button 
+              onClick={handleForceReload}
+              className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors text-sm"
+            >
+              Reload Page
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
-  if (!isLoaded || mapLoading) {
+  if (!isLoaded || mapLoading || !domReady) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-gray-100 rounded-lg">
         <div className="text-center">
           <LoadingSpinner size="lg" />
           <div className="mt-4 text-gray-600">
-            {mapLoading ? 'Processing map data...' : 'Loading Google Maps...'}
+            {!domReady ? 'Preparing map container...' :
+             mapLoading ? 'Processing map data...' : 
+             'Loading Google Maps...'}
           </div>
           <div className="mt-2 text-sm text-gray-500">
-            This may take a few moments
+            {!domReady ? 'Setting up DOM elements' :
+             'This may take a few moments'}
+          </div>
+          
+          {/* Progress indicator */}
+          <div className="mt-4 w-48 mx-auto">
+            <div className="bg-gray-200 rounded-full h-2">
+              <div 
+                className="bg-blue-500 h-2 rounded-full transition-all duration-500"
+                style={{ 
+                  width: !domReady ? '20%' : mapLoading ? '60%' : '90%' 
+                }}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -77,38 +148,72 @@ const MapContainer = () => {
 
   return (
     <div className="relative w-full h-full">
-      {/* Map container - ensure it has proper dimensions */}
+      {/* CRITICAL: This div MUST have id="google-map" for the hook to find it */}
       <div 
+        ref={mapContainerRef}
         id="google-map" 
         className="w-full h-full rounded-lg bg-gray-200"
         style={{ 
           minHeight: '400px',
-          position: 'relative' // Ensure proper positioning
+          position: 'relative',
+          overflow: 'hidden'
         }}
+        // Additional attributes to ensure proper rendering
+        data-testid="google-map-container"
+        role="application"
+        aria-label="Google Maps"
       />
       
+      {/* Selected place info overlay */}
       {selectedPlace && (
-        <div className="absolute bottom-4 left-4 right-4 bg-white rounded-lg shadow-lg p-4 max-w-sm">
-          <h3 className="font-semibold text-gray-900 mb-1">
-            {selectedPlace.name}
-          </h3>
-          <p className="text-sm text-gray-600 mb-2">
-            {selectedPlace.formatted_address}
-          </p>
-          {selectedPlace.types && (
-            <div className="flex flex-wrap gap-1">
-              {selectedPlace.types.slice(0, 3).map((type) => (
-                <span 
-                  key={type}
-                  className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full"
-                >
-                  {type.replace(/_/g, ' ')}
-                </span>
-              ))}
+        <div className="absolute bottom-4 left-4 right-4 bg-white rounded-lg shadow-lg p-4 max-w-sm z-10">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <h3 className="font-semibold text-gray-900 mb-1">
+                {selectedPlace.name}
+              </h3>
+              <p className="text-sm text-gray-600 mb-2">
+                {selectedPlace.formatted_address}
+              </p>
+              {selectedPlace.types && (
+                <div className="flex flex-wrap gap-1">
+                  {selectedPlace.types.slice(0, 3).map((type) => (
+                    <span 
+                      key={type}
+                      className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full"
+                    >
+                      {type.replace(/_/g, ' ')}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+            <button 
+              onClick={() => {
+                console.log('Place info panel closed');
+              }}
+              className="ml-2 text-gray-400 hover:text-gray-600 text-lg leading-none"
+              aria-label="Close place info"
+            >
+              ×
+            </button>
+          </div>
         </div>
       )}
+      
+      {/* Map controls overlay */}
+      <div className="absolute top-4 right-4 z-10">
+        <div className="bg-white rounded-lg shadow-md p-2">
+          <button 
+            onClick={handleRetry}
+            className="p-2 text-gray-600 hover:text-gray-800 transition-colors"
+            title="Refresh map"
+            aria-label="Refresh map"
+          >
+            🔄
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
