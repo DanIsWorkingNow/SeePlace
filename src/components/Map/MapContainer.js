@@ -16,7 +16,8 @@ const MapContainer = () => {
   const { selectedPlace } = useSelector(state => state.places);
   const { mapLoading } = useSelector(state => state.ui);
   
-  const { isLoaded } = useGoogleMaps('google-map');
+  // Get error from the hook as well
+  const { isLoaded, error } = useGoogleMaps('google-map');
 
   useEffect(() => {
     const handleMapError = (error) => {
@@ -28,14 +29,27 @@ const MapContainer = () => {
     return () => window.removeEventListener('error', handleMapError);
   }, []);
 
+  // Handle errors from the hook
+  useEffect(() => {
+    if (error) {
+      setMapError(`Map initialization failed: ${error}`);
+    }
+  }, [error]);
+
   if (mapError) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-gray-100 rounded-lg">
         <div className="text-center p-6">
           <div className="text-red-500 text-4xl mb-4">⚠️</div>
-          <div className="text-gray-600">{mapError}</div>
+          <div className="text-gray-600 mb-2">{mapError}</div>
+          <div className="text-sm text-gray-500 mb-4">
+            Check browser console for detailed error messages
+          </div>
           <button 
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              setMapError(null);
+              window.location.reload();
+            }}
             className="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
           >
             Retry
@@ -50,7 +64,12 @@ const MapContainer = () => {
       <div className="w-full h-full flex items-center justify-center bg-gray-100 rounded-lg">
         <div className="text-center">
           <LoadingSpinner size="lg" />
-          <div className="mt-4 text-gray-600">Loading map...</div>
+          <div className="mt-4 text-gray-600">
+            {mapLoading ? 'Processing map data...' : 'Loading Google Maps...'}
+          </div>
+          <div className="mt-2 text-sm text-gray-500">
+            This may take a few moments
+          </div>
         </div>
       </div>
     );
@@ -58,10 +77,14 @@ const MapContainer = () => {
 
   return (
     <div className="relative w-full h-full">
+      {/* Map container - ensure it has proper dimensions */}
       <div 
         id="google-map" 
-        className="w-full h-full rounded-lg"
-        style={{ minHeight: '400px' }}
+        className="w-full h-full rounded-lg bg-gray-200"
+        style={{ 
+          minHeight: '400px',
+          position: 'relative' // Ensure proper positioning
+        }}
       />
       
       {selectedPlace && (
