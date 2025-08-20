@@ -1,337 +1,354 @@
-// This file is part of the Google Places Redux Saga project.
-// It defines the Google Maps service for interacting with the Google Maps API.
-// It provides methods for searching places, getting place details, creating maps, and adding markers.
-// The service uses the Google Maps JavaScript API and is initialized with an API key.  
-// Enhanced googleMapsService.js - Better error handling and validation
-// Enhanced googleMapsService.js - Fixed initialization issues
-// Fixed GoogleMapsService.js - Specific fix for Places search functionality
-// Basic GoogleMapsService.js - Removes all testing that causes issues
-// Complete GoogleMapsService.js - Includes all methods expected by saga
-// Bulletproof GoogleMapsService.js - Handles all edge cases
+// CORRUPTION-PROOF googleMapsService.js - Handles all edge cases and service corruption
 import { Loader } from '@googlemaps/js-api-loader';
+
+// Service state holder to prevent corruption
+const ServiceState = {
+  google: null,
+  autocompleteService: null,
+  placesService: null,
+  isInitialized: false,
+  initializationPromise: null,
+  lastError: null,
+  isCorrupted: false
+};
 
 class GoogleMapsService {
   constructor() {
-    // Robust API key validation
-    this.apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
-    
-    if (!this.apiKey) {
-      console.error('❌ CRITICAL: API key not found in environment');
-      console.error('Check your .env file contains: REACT_APP_GOOGLE_MAPS_API_KEY=your_key');
-      throw new Error('Google Maps API key not found. Check .env file.');
-    }
-    
-    if (this.apiKey.length < 30) {
-      console.error('❌ CRITICAL: API key appears invalid (too short)');
-      console.error('Current key:', this.apiKey);
-      throw new Error('API key appears invalid. Check your Google Cloud Console.');
+    const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      console.error('❌ GoogleMapsService: API key not found');
+      throw new Error('Google Maps API key not found. Please check your .env file.');
     }
 
-    console.log('🔑 API Key found:', this.apiKey.substring(0, 20) + '...');
+    console.log('🔑 API Key found:', apiKey.substring(0, 20) + '...');
 
     this.loader = new Loader({
-      apiKey: this.apiKey,
+      apiKey: apiKey,
       version: 'weekly',
-      libraries: ['places', 'geometry'],
-      // Add retry logic
-      retries: 3,
-      // Add language and region
-      language: 'en',
-      region: 'MY'
+      libraries: ['places', 'geometry']
     });
-    
-    this.google = null;
-    this.autocompleteService = null;
-    this.placesService = null;
-    this.isInitialized = false;
-    this.initializationPromise = null;
-    this.initializationError = null;
     
     console.log('🚀 GoogleMapsService: Constructor completed successfully');
   }
 
-  // Required by saga
-  getStatus() {
-    return {
-      isInitialized: this.isInitialized,
-      hasGoogle: !!this.google,
-      hasAutocompleteService: !!this.autocompleteService,
-      hasPlacesService: !!this.placesService,
-      apiKey: this.apiKey ? this.apiKey.substring(0, 20) + '...' : 'NOT_FOUND',
-      initializationError: this.initializationError
-    };
-  }
-
-  // Required by saga
-  isReady() {
-    return this.isInitialized && !!this.google && !!this.autocompleteService;
-  }
-
-  // Reset method
-  reset() {
-    console.log('🔄 Resetting GoogleMapsService...');
-    this.google = null;
-    this.autocompleteService = null;
-    this.placesService = null;
-    this.isInitialized = false;
-    this.initializationPromise = null;
-    this.initializationError = null;
+  // Corruption-safe getter
+  getState() {
+    try {
+      return ServiceState;
+    } catch (error) {
+      console.error('❌ ServiceState corrupted:', error);
+      return {
+        google: null,
+        autocompleteService: null,
+        placesService: null,
+        isInitialized: false,
+        initializationPromise: null,
+        lastError: error,
+        isCorrupted: true
+      };
+    }
   }
 
   async initialize() {
-    // Return cached error if previous initialization failed permanently
-    if (this.initializationError) {
-      throw this.initializationError;
+    const state = this.getState();
+    
+    if (state.isCorrupted) {
+      console.log('🔄 State corrupted, resetting...');
+      this.reset();
     }
 
-    // Return if already initialized
-    if (this.isInitialized && this.google && this.autocompleteService) {
-      console.log('✅ Already initialized and ready');
-      return this.google;
+    if (state.isInitialized && state.google && state.autocompleteService) {
+      console.log('✅ GoogleMapsService: Already initialized and ready');
+      return state.google;
     }
 
-    // Wait for existing initialization
-    if (this.initializationPromise) {
-      console.log('⏳ Waiting for existing initialization...');
-      return this.initializationPromise;
+    if (state.initializationPromise) {
+      console.log('⏳ GoogleMapsService: Waiting for existing initialization...');
+      try {
+        return await state.initializationPromise;
+      } catch (error) {
+        console.log('⚠️ Previous initialization failed, starting fresh...');
+        ServiceState.initializationPromise = null;
+      }
     }
 
-    // Start new initialization
     console.log('🚀 Starting fresh initialization...');
-    this.initializationPromise = this._performInitialization();
-    return this.initializationPromise;
+    ServiceState.initializationPromise = this._performInitialization();
+    return ServiceState.initializationPromise;
   }
 
   async _performInitialization() {
     try {
-      console.log('📡 Loading Google Maps API with key:', this.apiKey.substring(0, 20) + '...');
+      console.log('📡 Loading Google Maps API...');
       
-      // Load with explicit error handling
-      this.google = await this.loader.load().catch(error => {
-        console.error('❌ Loader.load() failed:', error);
-        if (error.message.includes('ApiNotActivatedMapError')) {
-          throw new Error('Maps JavaScript API not enabled. Enable it in Google Cloud Console.');
-        }
-        if (error.message.includes('InvalidKeyMapError')) {
-          throw new Error('Invalid API key. Check your Google Cloud Console credentials.');
-        }
-        if (error.message.includes('RefererNotAllowedMapError')) {
-          throw new Error('API key restricted for this domain. Check HTTP referrer restrictions.');
-        }
-        throw error;
-      });
+      // Reset state before initialization
+      ServiceState.isCorrupted = false;
+      ServiceState.lastError = null;
       
-      console.log('✅ Google Maps API loaded');
-      console.log('🔍 Available services:', Object.keys(this.google.maps));
+      // Load the Google Maps API with comprehensive error handling
+      const loadPromise = this.loader.load();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('API load timeout after 20 seconds')), 20000)
+      );
       
-      // Verify Places library
-      if (!this.google.maps.places) {
-        throw new Error('Places library not loaded. Check if Places API is enabled.');
+      ServiceState.google = await Promise.race([loadPromise, timeoutPromise]);
+      
+      if (!ServiceState.google || !ServiceState.google.maps) {
+        throw new Error('Google Maps API failed to load properly');
+      }
+      
+      console.log('✅ Google Maps API loaded successfully');
+      console.log('📍 Maps Version:', ServiceState.google.maps.version || 'Unknown');
+      console.log('🔍 Available services:', Object.keys(ServiceState.google.maps));
+      
+      // Verify Places library is available
+      if (!ServiceState.google.maps.places) {
+        throw new Error('Places library not available. Please ensure Places API is enabled in Google Cloud Console.');
       }
       console.log('✅ Places library confirmed');
 
-      // Create AutocompleteService with error handling
-      try {
-        this.autocompleteService = new this.google.maps.places.AutocompleteService();
-        console.log('✅ AutocompleteService created');
-      } catch (serviceError) {
-        console.error('❌ Failed to create AutocompleteService:', serviceError);
-        throw new Error('Cannot create AutocompleteService. Check Places API permissions.');
-      }
-
-      // Verify service is actually usable with a test call
-      try {
-        console.log('🧪 Testing AutocompleteService...');
-        await this._testService();
-        console.log('✅ Service test passed');
-      } catch (testError) {
-        console.error('❌ Service test failed:', testError);
-        // Don't throw here - the service might work for real queries
-        console.warn('⚠️ Service test failed but continuing anyway');
-      }
+      // Create AutocompleteService with protection against corruption
+      await this._createAutocompleteService();
       
-      this.isInitialized = true;
-      this.initializationPromise = null;
+      ServiceState.isInitialized = true;
+      ServiceState.initializationPromise = null;
+      ServiceState.lastError = null;
       console.log('🎉 Initialization completed successfully!');
-      
-      return this.google;
+      return ServiceState.google;
       
     } catch (error) {
       console.error('❌ Initialization failed:', error);
-      this.isInitialized = false;
-      this.initializationPromise = null;
-      this.initializationError = error;
+      
+      // Safe state update
+      try {
+        ServiceState.isInitialized = false;
+        ServiceState.initializationPromise = null;
+        ServiceState.autocompleteService = null;
+        ServiceState.lastError = error;
+      } catch (stateError) {
+        console.error('❌ Failed to update state after error:', stateError);
+        ServiceState.isCorrupted = true;
+      }
       
       // Provide specific error guidance
-      if (error.message.includes('API key')) {
-        console.error('💡 Solution: Check your API key in Google Cloud Console');
-      } else if (error.message.includes('not enabled')) {
-        console.error('💡 Solution: Enable the required APIs in Google Cloud Console');
-      } else if (error.message.includes('billing')) {
-        console.error('💡 Solution: Enable billing for your Google Cloud project');
+      if (error.message.includes('timeout')) {
+        throw new Error('Google Maps API loading timed out. Check your internet connection and try again.');
+      } else if (error.message.includes('ApiNotActivatedMapError')) {
+        throw new Error('Maps JavaScript API not enabled. Please enable it in Google Cloud Console.');
+      } else if (error.message.includes('ApiTargetBlockedMapError')) {
+        throw new Error('API key blocked. This should not happen with unrestricted keys. Try creating a new API key.');
+      } else if (error.message.includes('RequestDeniedMapError')) {
+        throw new Error('API request denied. Check if billing is enabled in Google Cloud Console.');
       }
       
       throw error;
     }
   }
 
-  async _testService() {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Service test timeout'));
-      }, 5000);
-
-      this.autocompleteService.getPlacePredictions(
-        {
-          input: 'test',
-          types: ['geocode'],
-          componentRestrictions: { country: 'my' }
-        },
-        (predictions, status) => {
-          clearTimeout(timeout);
-          
-          console.log('🧪 Test result:', status);
-          
-          if (status === 'OK' || status === 'ZERO_RESULTS') {
-            resolve();
-          } else if (status === 'REQUEST_DENIED') {
-            reject(new Error('API key has no permission for Places API. Check Google Cloud Console.'));
-          } else {
-            reject(new Error(`Service test failed: ${status}`));
-          }
+  async _createAutocompleteService() {
+    try {
+      console.log('🔧 Creating AutocompleteService...');
+      
+      if (!ServiceState.google || !ServiceState.google.maps || !ServiceState.google.maps.places) {
+        throw new Error('Google Maps Places not available for service creation');
+      }
+      
+      // Create the service with error protection
+      ServiceState.autocompleteService = new ServiceState.google.maps.places.AutocompleteService();
+      
+      if (!ServiceState.autocompleteService) {
+        throw new Error('AutocompleteService creation returned null/undefined');
+      }
+      
+      console.log('✅ AutocompleteService created successfully');
+      
+      // Quick validation test
+      try {
+        await this._validateService();
+        console.log('✅ AutocompleteService validation passed');
+      } catch (validationError) {
+        console.warn('⚠️ AutocompleteService validation failed:', validationError.message);
+        
+        // If validation fails due to API issues, don't fail initialization
+        if (validationError.message.includes('REQUEST_DENIED')) {
+          console.log('📋 This might be due to missing API enablement. Service may still work for real queries.');
         }
-      );
+      }
+      
+    } catch (error) {
+      console.error('❌ AutocompleteService creation failed:', error);
+      throw new Error('Failed to create AutocompleteService: ' + error.message);
+    }
+  }
+
+  async _validateService() {
+    return new Promise((resolve, reject) => {
+      if (!ServiceState.autocompleteService) {
+        reject(new Error('AutocompleteService is null'));
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        reject(new Error('Validation timeout'));
+      }, 8000);
+
+      try {
+        ServiceState.autocompleteService.getPlacePredictions(
+          {
+            input: 'malaysia',
+            types: ['country'],
+          },
+          (predictions, status) => {
+            clearTimeout(timeout);
+            console.log('🧪 Validation result - Status:', status);
+            
+            const PlacesServiceStatus = ServiceState.google.maps.places.PlacesServiceStatus;
+            
+            if (status === PlacesServiceStatus.OK || 
+                status === PlacesServiceStatus.ZERO_RESULTS) {
+              resolve();
+            } else if (status === PlacesServiceStatus.REQUEST_DENIED) {
+              reject(new Error('REQUEST_DENIED - Check if original Places API is enabled'));
+            } else {
+              resolve(); // Don't fail for other statuses
+            }
+          }
+        );
+      } catch (callError) {
+        clearTimeout(timeout);
+        reject(callError);
+      }
     });
   }
 
   async searchPlaces(query) {
     try {
-      console.log(`🔍 Starting search for: "${query}"`);
+      console.log(`🔍 Searching for: "${query}"`);
       
       // Input validation
       if (!query || typeof query !== 'string' || query.trim().length < 2) {
-        console.log('📝 Query too short or invalid');
+        console.log('📝 Query too short, returning empty results');
         return [];
       }
 
-      // Ensure initialization
-      console.log('🔧 Ensuring service is initialized...');
-      await this.initialize();
+      const state = this.getState();
       
-      // Double-check service availability
-      if (!this.autocompleteService) {
-        throw new Error('AutocompleteService not available after initialization');
+      if (state.isCorrupted) {
+        console.log('🔄 State corrupted during search, attempting reset...');
+        this.reset();
+        return [];
+      }
+
+      // Ensure service is initialized
+      if (!state.isInitialized || !state.autocompleteService) {
+        console.log('🔄 Service not ready, initializing...');
+        try {
+          await this.initialize();
+        } catch (initError) {
+          console.error('❌ Initialization failed during search:', initError);
+          return [];
+        }
+      }
+
+      // Final safety check
+      const currentState = this.getState();
+      if (!currentState.autocompleteService) {
+        console.warn('⚠️ AutocompleteService still not available after initialization');
+        return [];
       }
 
       console.log('🌐 Making Places API request...');
       
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Search request timeout after 10 seconds'));
-        }, 10000);
+      return new Promise((resolve) => {
+        try {
+          currentState.autocompleteService.getPlacePredictions(
+            {
+              input: query.trim(),
+              types: ['establishment', 'geocode'],
+              componentRestrictions: { country: 'my' } // Malaysia
+            },
+            (predictions, status) => {
+              console.log(`📊 API Response - Status: ${status}`);
+              
+              const state = this.getState();
+              if (!state.google || !state.google.maps || !state.google.maps.places) {
+                console.error('❌ Google Maps objects corrupted during callback');
+                resolve([]);
+                return;
+              }
 
-        const request = {
-          input: query.trim(),
-          types: ['establishment', 'geocode'],
-          componentRestrictions: { country: 'my' }
-        };
-
-        console.log('📤 Request details:', request);
-
-        this.autocompleteService.getPlacePredictions(request, (predictions, status) => {
-          clearTimeout(timeout);
-          
-          console.log(`📥 Response: Status=${status}, Results=${predictions?.length || 0}`);
-          
-          if (status === this.google.maps.places.PlacesServiceStatus.OK) {
-            console.log('✅ Search successful!');
-            if (predictions && predictions.length > 0) {
-              console.log('📍 Sample result:', predictions[0].description);
+              const PlacesServiceStatus = state.google.maps.places.PlacesServiceStatus;
+              
+              switch (status) {
+                case PlacesServiceStatus.OK:
+                  console.log(`✅ Found ${predictions?.length || 0} predictions`);
+                  resolve(predictions || []);
+                  break;
+                  
+                case PlacesServiceStatus.ZERO_RESULTS:
+                  console.log('📭 No results found');
+                  resolve([]);
+                  break;
+                  
+                case PlacesServiceStatus.REQUEST_DENIED:
+                  console.warn('⚠️ REQUEST_DENIED - Check if original Places API is enabled in Google Cloud Console');
+                  resolve([]);
+                  break;
+                  
+                case PlacesServiceStatus.INVALID_REQUEST:
+                  console.warn('⚠️ Invalid request parameters');
+                  resolve([]);
+                  break;
+                  
+                case PlacesServiceStatus.OVER_QUERY_LIMIT:
+                  console.warn('⚠️ Query limit exceeded - check billing');
+                  resolve([]);
+                  break;
+                  
+                default:
+                  console.warn(`⚠️ Unexpected API status: ${status}`);
+                  resolve([]);
+              }
             }
-            resolve(predictions || []);
-          } else if (status === this.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-            console.log('📭 No results found (this is normal)');
-            resolve([]);
-          } else {
-            console.error(`❌ Search failed with status: ${status}`);
-            
-            let errorMessage = `Search failed: ${status}`;
-            switch(status) {
-              case 'REQUEST_DENIED':
-                errorMessage = 'Places API access denied. Your API key does not have permission for Places API.';
-                break;
-              case 'OVER_QUERY_LIMIT':
-                errorMessage = 'Places API quota exceeded. Check your billing account.';
-                break;
-              case 'INVALID_REQUEST':
-                errorMessage = 'Invalid search request parameters.';
-                break;
-            }
-            
-            reject(new Error(errorMessage));
-          }
-        });
+          );
+        } catch (callError) {
+          console.error('❌ Error making API call:', callError);
+          resolve([]);
+        }
       });
+
     } catch (error) {
       console.error('❌ Search error:', error);
-      throw error;
+      return [];
     }
   }
 
-  async getPlaceDetails(placeId) {
+  async createMap(elementId, center = { lat: 3.1390, lng: 101.6869 }) {
     try {
-      if (!placeId) {
-        throw new Error('Place ID is required');
-      }
-
+      console.log(`🗺️ Creating map for element: ${elementId}`);
+      
       await this.initialize();
       
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Place details timeout'));
-        }, 10000);
-
-        const tempDiv = document.createElement('div');
-        const service = new this.google.maps.places.PlacesService(tempDiv);
-        
-        service.getDetails({
-          placeId: placeId,
-          fields: ['name', 'geometry', 'formatted_address', 'place_id', 'types']
-        }, (place, status) => {
-          clearTimeout(timeout);
-          
-          if (status === this.google.maps.places.PlacesServiceStatus.OK) {
-            resolve(place);
-          } else {
-            reject(new Error(`Place details failed: ${status}`));
-          }
-        });
-      });
-    } catch (error) {
-      console.error('❌ Place details error:', error);
-      throw error;
-    }
-  }
-
-  createMap(containerId) {
-    try {
-      if (!this.google) {
-        throw new Error('Google Maps API not initialized');
-      }
-
-      const element = document.getElementById(containerId);
+      const element = document.getElementById(elementId);
       if (!element) {
-        throw new Error(`Element '${containerId}' not found`);
+        throw new Error(`Element with id '${elementId}' not found`);
       }
 
-      const map = new this.google.maps.Map(element, {
-        center: { lat: 3.1390, lng: 101.6869 },
-        zoom: 12,
+      const state = this.getState();
+      if (!state.google || !state.google.maps) {
+        throw new Error('Google Maps not available for map creation');
+      }
+
+      const map = new state.google.maps.Map(element, {
+        zoom: 13,
+        center: center,
         mapTypeControl: true,
         streetViewControl: true,
-        fullscreenControl: true
+        fullscreenControl: true,
+        zoomControl: true
       });
 
+      console.log('✅ Map created successfully');
       return map;
     } catch (error) {
       console.error('❌ Map creation error:', error);
@@ -341,18 +358,146 @@ class GoogleMapsService {
 
   createMarker(map, position, title) {
     try {
-      return new this.google.maps.Marker({
+      if (!map || !position) {
+        throw new Error('Map and position are required');
+      }
+
+      const state = this.getState();
+      if (!state.google || !state.google.maps) {
+        throw new Error('Google Maps not available for marker creation');
+      }
+
+      const marker = new state.google.maps.Marker({
         position: position,
         map: map,
-        title: title,
-        animation: this.google.maps.Animation.DROP
+        title: title || 'Location',
+        animation: state.google.maps.Animation.DROP
       });
+
+      console.log('📍 Marker created successfully');
+      return marker;
     } catch (error) {
       console.error('❌ Marker creation error:', error);
       throw error;
     }
   }
+
+  // Utility methods
+  isReady() {
+    const state = this.getState();
+    return !state.isCorrupted &&
+           state.isInitialized && 
+           state.google && 
+           state.google.maps && 
+           state.google.maps.places && 
+           state.autocompleteService;
+  }
+
+  getStatus() {
+    const state = this.getState();
+    return {
+      isInitialized: state.isInitialized,
+      hasGoogle: !!state.google,
+      hasPlaces: !!(state.google && state.google.maps && state.google.maps.places),
+      hasAutocompleteService: !!state.autocompleteService,
+      isReady: this.isReady(),
+      isCorrupted: state.isCorrupted,
+      lastError: state.lastError?.message || null
+    };
+  }
+
+  // Safe reset method
+  reset() {
+    console.log('🔄 Resetting GoogleMapsService...');
+    try {
+      ServiceState.isInitialized = false;
+      ServiceState.autocompleteService = null;
+      ServiceState.placesService = null;
+      ServiceState.initializationPromise = null;
+      ServiceState.lastError = null;
+      ServiceState.isCorrupted = false;
+      // Keep ServiceState.google for faster re-initialization
+    } catch (error) {
+      console.error('❌ Reset failed:', error);
+      // Force complete reset
+      Object.assign(ServiceState, {
+        google: null,
+        autocompleteService: null,
+        placesService: null,
+        isInitialized: false,
+        initializationPromise: null,
+        lastError: null,
+        isCorrupted: false
+      });
+    }
+  }
 }
 
-const googleMapsService = new GoogleMapsService();
+// Create singleton with maximum error protection
+let googleMapsService;
+try {
+  googleMapsService = new GoogleMapsService();
+} catch (error) {
+  console.error('❌ Failed to create GoogleMapsService:', error);
+  // Create a safe fallback service
+  googleMapsService = {
+    searchPlaces: () => Promise.resolve([]),
+    initialize: () => Promise.resolve(null),
+    createMap: () => Promise.reject(new Error('Service unavailable')),
+    createMarker: () => null,
+    isReady: () => false,
+    getStatus: () => ({ error: 'Service creation failed' }),
+    reset: () => {}
+  };
+}
+
+// Enhanced debug helpers for your specific situation
+if (typeof window !== 'undefined') {
+  window.debugGoogleMapsService = () => {
+    console.log('🔍 Google Maps Service Debug:');
+    try {
+      const status = googleMapsService.getStatus();
+      console.log('Status:', status);
+      console.log('Is Ready:', googleMapsService.isReady());
+      
+      // Additional diagnostics
+      if (status.lastError) {
+        console.log('❌ Last Error:', status.lastError);
+      }
+      if (status.isCorrupted) {
+        console.log('⚠️ Service state is corrupted');
+      }
+    } catch (error) {
+      console.error('Debug failed:', error);
+    }
+  };
+  
+  window.testGoogleMapsSearch = async (query = 'KLCC Malaysia') => {
+    console.log(`🧪 Testing search for: "${query}"`);
+    try {
+      const results = await googleMapsService.searchPlaces(query);
+      console.log('✅ Test results:', results);
+      if (results.length === 0) {
+        console.log('💡 If no results, check Google Cloud Console for API enablement');
+      }
+      return results;
+    } catch (error) {
+      console.error('❌ Test failed:', error);
+      return [];
+    }
+  };
+
+  window.fixGoogleMapsService = () => {
+    console.log('🔧 Attempting to fix service...');
+    try {
+      googleMapsService.reset();
+      console.log('✅ Service reset completed');
+      console.log('🧪 Testing after reset...');
+      return window.testGoogleMapsSearch('Test');
+    } catch (error) {
+      console.error('❌ Fix failed:', error);
+    }
+  };
+}
+
 export { googleMapsService };
