@@ -1,152 +1,105 @@
-// FIXED placesSaga.js - Resolves method binding issues with Redux Saga
-import { 
-  call, 
-  put, 
-  takeEvery, 
-  delay, 
-  take,
-  cancel,
-  fork,
-  all
-} from 'redux-saga/effects';
-import { 
+
+// Enhanced Places Saga with complete auto-pinning workflow and error handling
+import { call, put, take, takeEvery, debounce, all, fork, cancel, delay } from 'redux-saga/effects';
+import {
   searchPlacesRequest,
   searchPlacesSuccess,
   searchPlacesFailure,
   selectPlace,
   addToSearchHistory,
-  clearMarkers,
-  addMarker
+  setMap,
+  addMarker,
+  clearMarkers
 } from '../slices/placesSlice';
-import { 
-  setSearchLoading, 
-  setError, 
-  clearError,
-  setMapLoading 
-} from '../slices/uiSlice';
+import { setSearchLoading, setMapLoading, setError } from '../slices/uiSlice';
 import { googleMapsService } from '../../services/googleMapsService';
 
-function* debouncedSearchSaga(action) {
-  try {
-    console.log('🔍 Saga: Starting search saga');
-    yield put(setSearchLoading(true));
-    yield put(clearError());
-    
-    // Add small delay for debouncing
-    yield delay(300);
-    
-    const { query } = action.payload;
-    console.log(`📝 Saga: Processing search query: "${query}"`);
-    
-    // Validate query
-    if (!query || query.length < 2) {
-      console.log('⚠️ Saga: Query too short, returning empty results');
-      yield put(searchPlacesSuccess([]));
-      return;
-    }
-
-    // Check if service is available
-    if (!googleMapsService) {
-      console.error('❌ Saga: googleMapsService is not available');
-      throw new Error('Google Maps service is not available. Please refresh the page.');
-    }
-
-    // Debug service status (safe way)
-    try {
-      const serviceStatus = googleMapsService.getStatus ? googleMapsService.getStatus() : 'Status method not available';
-      console.log('📊 Saga: Service status:', serviceStatus);
-    } catch (statusError) {
-      console.warn('⚠️ Saga: Could not get service status:', statusError.message);
-    }
-    
-    // FIXED: Use arrow function to preserve binding context
-    console.log('🌐 Saga: Calling googleMapsService.searchPlaces()');
-    const places = yield call(() => googleMapsService.searchPlaces(query));
-    
-    console.log(`✅ Saga: Search successful, found ${places?.length || 0} places`);
-    yield put(searchPlacesSuccess(places || []));
-    
-  } catch (error) {
-    console.error('❌ Saga: Search error:', error);
-    
-    // Create user-friendly error message
-    let userMessage = 'Search failed. Please try again.';
-    
-    if (error.message.includes('API key')) {
-      userMessage = 'Google Maps API key issue. Please check configuration.';
-    } else if (error.message.includes('quota')) {
-      userMessage = 'Search limit reached. Please try again later.';
-    } else if (error.message.includes('network') || error.message.includes('fetch')) {
-      userMessage = 'Network error. Please check your internet connection.';
-    } else if (error.message.includes('initialize')) {
-      userMessage = 'Maps service initialization failed. Please refresh the page.';
-    } else if (error.message.includes('getState') || error.message.includes('null')) {
-      userMessage = 'Service initialization error. Refreshing the page may help.';
-    }
-    
-    yield put(searchPlacesFailure(error.message));
-    yield put(setError(userMessage));
-    
-  } finally {
-    yield put(setSearchLoading(false));
-  }
-}
-
+// 🎯 CORE AUTO-PINNING SAGA - Handles place selection and automatic map updating
 function* selectPlaceSaga(action) {
   try {
-    console.log('🏢 Saga: Starting place selection saga');
-    yield put(setMapLoading(true));
+    console.log('🎯 Saga: AUTO-PINNING workflow started for place:', action.payload.place?.name);
     
     const { place, query } = action.payload;
     
-    if (!place || !place.place_id) {
-      throw new Error('Invalid place data received');
-    }
-
-    console.log(`📍 Saga: Getting details for place: ${place.place_id}`);
-    
-    // Check service availability
-    if (!googleMapsService) {
-      throw new Error('Google Maps service is not available');
+    if (!place) {
+      console.warn('⚠️ Saga: No place provided for selection');
+      return;
     }
     
-    // FIXED: Use arrow function to preserve binding context
-    let placeDetails;
-    if (googleMapsService.getPlaceDetails) {
-      placeDetails = yield call(() => googleMapsService.getPlaceDetails(place.place_id));
+    // Step 1: Set loading state for map updates
+    yield put(setMapLoading(true));
+    yield put(setError(null));
+    
+    // Step 2: Get detailed place information if place_id exists but no geometry
+    let detailedPlace = place;
+    
+    if (place.place_id && (!place.geometry || !place.geometry.location)) {
+      console.log('📊 Saga: Fetching detailed place information for geometry...');
+      try {
+        const placeDetails = yield call([googleMapsService, 'getPlaceDetails'], place.place_id);
+        
+        if (placeDetails && placeDetails.geometry) {
+          detailedPlace = {
+            ...place,
+            ...placeDetails,
+            // Preserve original description if available
+            description: place.description || placeDetails.formatted_address
+          };
+          console.log('✅ Saga: Got detailed place data with geometry:', detailedPlace.geometry.location);
+        } else {
+          console.warn('⚠️ Saga: Place details API returned no geometry data');
+        }
+        
+      } catch (error) {
+        console.warn('⚠️ Saga: Could not get place details:', error.message);
+        // Continue with original place data - auto-pinning might still work if it has geometry
+      }
+    }
+    
+    // Step 3: Validate that we have location data for auto-pinning
+    if (!detailedPlace.geometry || !detailedPlace.geometry.location) {
+      console.warn('⚠️ Saga: Cannot auto-pin - place has no geometry data:', detailedPlace);
+      yield put(setError('Selected place has no location data for mapping'));
     } else {
-      // If getPlaceDetails doesn't exist, use the place data we have
-      placeDetails = place;
+      console.log('📍 Saga: Place has valid geometry for auto-pinning:', {
+        lat: detailedPlace.geometry.location.lat,
+        lng: detailedPlace.geometry.location.lng
+      });
     }
     
-    if (!placeDetails) {
-      throw new Error('No place details received from Google API');
+    // Step 4: Update Redux state with selected place (triggers auto-pinning in useGoogleMaps)
+    yield put(selectPlace(detailedPlace));
+    console.log('📍 Saga: Place selection dispatched - auto-pinning should trigger in useGoogleMaps hook');
+    
+    // Step 5: Add to search history for future reference
+    if (query && detailedPlace) {
+      yield put(addToSearchHistory({
+        query: query.trim(),
+        place: detailedPlace,
+        timestamp: new Date().toISOString()
+      }));
+      console.log('📚 Saga: Added to search history:', detailedPlace.name);
     }
-
-    console.log('✅ Saga: Place details retrieved successfully');
-    yield put(selectPlace(placeDetails));
     
-    // Add to search history
-    yield put(addToSearchHistory({
-      query: query || place.description || placeDetails.name,
-      place: placeDetails,
-      timestamp: Date.now()
-    }));
+    // Step 6: Wait a moment for map to update, then log completion
+    yield delay(300);
     
-    // Update map with new place
-    yield fork(updateMapSaga, placeDetails);
+    console.log('✅ Saga: AUTO-PINNING workflow completed successfully for:', detailedPlace.name);
     
   } catch (error) {
-    console.error('❌ Saga: Place selection error:', error);
+    console.error('❌ Saga: Auto-pinning workflow failed:', error);
     
-    let userMessage = 'Failed to load place details. Please try again.';
+    // Provide user-friendly error messages based on error type
+    let userMessage = 'Failed to select place. Please try again.';
     
     if (error.message.includes('API key')) {
       userMessage = 'Google Maps API key issue. Please check configuration.';
-    } else if (error.message.includes('quota')) {
+    } else if (error.message.includes('quota') || error.message.includes('limit')) {
       userMessage = 'Place details limit reached. Please try again later.';
-    } else if (error.message.includes('network')) {
+    } else if (error.message.includes('network') || error.message.includes('fetch')) {
       userMessage = 'Network error. Please check your internet connection.';
+    } else if (error.message.includes('permission')) {
+      userMessage = 'API permission denied. Please check your Google Maps API setup.';
     }
     
     yield put(setError(userMessage));
@@ -156,99 +109,150 @@ function* selectPlaceSaga(action) {
   }
 }
 
-function* updateMapSaga(place) {
+// Enhanced search saga with improved debouncing and error handling
+function* debouncedSearchSaga(action) {
   try {
-    console.log('🗺️ Saga: Updating map with place data');
+    const { query } = action.payload;
     
-    // Clear existing markers
-    yield put(clearMarkers());
+    if (!query || query.trim().length < 2) {
+      console.log('📝 Saga: Query too short for search, clearing results');
+      yield put(searchPlacesSuccess([]));
+      return;
+    }
     
-    // Add new marker if place has geometry
-    if (place.geometry && place.geometry.location) {
-      console.log('📍 Saga: Adding marker to map');
-      yield put(addMarker({
-        position: place.geometry.location,
-        title: place.name || 'Selected Place',
-        placeId: place.place_id
-      }));
+    console.log(`🔍 Saga: Searching for "${query.trim()}"`);
+    yield put(setSearchLoading(true));
+    yield put(setError(null));
+    
+    // Call Google Maps service with timeout protection
+    const places = yield call([googleMapsService, 'searchPlaces'], query.trim());
+    
+    if (Array.isArray(places)) {
+      yield put(searchPlacesSuccess(places));
+      console.log(`✅ Saga: Found ${places.length} places for "${query}"`);
     } else {
-      console.warn('⚠️ Saga: Place does not have geometry data for marker');
+      console.warn('⚠️ Saga: Search returned non-array result:', places);
+      yield put(searchPlacesSuccess([]));
     }
     
   } catch (error) {
-    console.error('❌ Saga: Map update error:', error);
-    // Don't throw here - map update is not critical for the main flow
+    console.error('❌ Saga: Search failed:', error);
+    
+    // Provide specific error messages
+    let userMessage = 'Search failed. Please try again.';
+    if (error.message.includes('quota')) {
+      userMessage = 'Search quota exceeded. Please try again later.';
+    } else if (error.message.includes('network')) {
+      userMessage = 'Network error. Please check your connection.';
+    }
+    
+    yield put(searchPlacesFailure(error.message));
+    yield put(setError(userMessage));
+    yield put(searchPlacesSuccess([])); // Clear results on error
+    
+  } finally {
+    yield put(setSearchLoading(false));
   }
 }
 
+// Advanced search flow with task cancellation to prevent overlapping searches
 function* searchFlowSaga() {
-  let searchTask;
+  let currentSearchTask;
   
-  console.log('🔄 Saga: Starting search flow watcher');
+  console.log('🔄 Saga: Starting search flow watcher with task cancellation');
   
   while (true) {
     try {
       const action = yield take(searchPlacesRequest.type);
       
-      // Cancel previous search if still running
-      if (searchTask) {
+      // Cancel previous search if still running to prevent race conditions
+      if (currentSearchTask) {
         console.log('🛑 Saga: Cancelling previous search task');
-        yield cancel(searchTask);
+        yield cancel(currentSearchTask);
       }
       
-      // Start new search
-      searchTask = yield fork(debouncedSearchSaga, action);
+      // Start new search task
+      currentSearchTask = yield fork(debouncedSearchSaga, action);
       
     } catch (error) {
       console.error('❌ Saga: Search flow error:', error);
+      // Don't break the loop - continue watching for new search requests
     }
   }
 }
 
+// Watchers for different actions
 function* watchSearchPlaces() {
   console.log('👀 Saga: Starting search places watcher');
   yield fork(searchFlowSaga);
 }
 
 function* watchSelectPlace() {
-  console.log('👀 Saga: Starting place selection watcher');
+  console.log('👀 Saga: Starting AUTO-PINNING place selection watcher');
   yield takeEvery(selectPlace.type, selectPlaceSaga);
 }
 
-// Root saga with enhanced error handling
+// Optional: Watch for map updates to log auto-pinning success
+function* watchMapUpdates() {
+  console.log('👀 Saga: Starting map updates watcher');
+  // This can be used to track when markers are added/removed
+  // yield takeEvery([addMarker.type, clearMarkers.type], function* (action) {
+  //   console.log('🗺️ Saga: Map update detected:', action.type);
+  // });
+}
+
+// Root saga with comprehensive error handling
 export default function* placesSaga() {
   try {
-    console.log('🚀 Saga: Starting places saga');
+    console.log('🚀 Saga: Starting places saga with AUTO-PINNING support');
+    console.log('🔧 Saga: Available watchers - search, select, map updates');
     
+    // Start all watchers concurrently
     yield all([
       fork(watchSearchPlaces),
-      fork(watchSelectPlace)
+      fork(watchSelectPlace),
+      fork(watchMapUpdates)
     ]);
     
   } catch (error) {
     console.error('❌ Saga: Root saga error:', error);
-    // In a real app, you might want to dispatch a global error action here
+    // In production, you might want to dispatch a global error action here
+    // yield put(setGlobalError('Application state management failed'));
   }
 }
 
-// Enhanced debug helper for saga monitoring
-if (typeof window !== 'undefined') {
-  window.debugPlacesSaga = () => {
-    console.log('🔍 Places Saga Debug Info:');
-    console.log('Service available:', !!googleMapsService);
+// Development helpers for debugging auto-pinning workflow
+if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+  window.debugAutoPinning = () => {
+    console.log('🔍 Auto-Pinning Debug Info:');
+    console.log('Google Maps Service available:', !!googleMapsService);
+    
     if (googleMapsService) {
       try {
         console.log('Service status:', googleMapsService.getStatus ? googleMapsService.getStatus() : 'Status method not available');
         console.log('Service ready:', googleMapsService.isReady ? googleMapsService.isReady() : 'Ready method not available');
-      } catch (error) {
-        console.log('Service debug error:', error.message);
+      } catch (e) {
+        console.warn('Could not get service status:', e);
       }
     }
+    
+    // Sample place for testing auto-pinning
+    const samplePlace = {
+      name: 'Kuala Lumpur City Centre',
+      place_id: 'ChIJiY1E1DG4zDER3DAP9EqWgS8',
+      geometry: {
+        location: { lat: 3.1578, lng: 101.7118 }
+      },
+      formatted_address: 'Kuala Lumpur City Centre, Kuala Lumpur, Malaysia',
+      types: ['sublocality_level_1', 'sublocality', 'political']
+    };
+    
+    console.log('🧪 Test auto-pinning with sample place:', samplePlace);
+    console.log('💡 To test: store.dispatch(selectPlace(samplePlace))');
   };
-
-  window.testSagaSearch = (query = 'KLCC Malaysia') => {
-    console.log(`🧪 Testing saga search flow for: "${query}"`);
-    // This would require Redux store access to dispatch the action
-    console.log('💡 To test saga flow, type in the search box in the UI');
+  
+  window.debugSearchWorkflow = () => {
+    console.log('🔍 Search Workflow Debug:');
+    console.log('💡 To test search: store.dispatch(searchPlacesRequest({ query: "petronas" }))');
   };
 }

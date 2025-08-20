@@ -10,6 +10,7 @@ import MapContainer from './Map/MapContainer';
 import SearchHistory from './SearchHistory/SearchHistory';
 import ErrorBoundary from './common/ErrorBoundary';
 import Header from './common/Header';
+import AutoPinningDemo from './AutoPinningDemo/AutoPinningDemo';
 
 const PlaceSearchApp = () => {
   return (
@@ -21,6 +22,10 @@ const PlaceSearchApp = () => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             
             <div className="lg:col-span-1 space-y-6">
+              
+              {/* ADD THIS: Auto-Pinning Demo Component */}
+              <AutoPinningDemo />
+              
               <div className="bg-white rounded-lg shadow-md p-6">
                 <h2 className="text-xl font-semibold text-gray-800 mb-4">
                   Search Places

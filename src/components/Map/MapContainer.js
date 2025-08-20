@@ -6,7 +6,8 @@
 // The component also handles loading states and errors related to the map initialization.  
 // The map is displayed within a responsive container, and the selected place's details are shown in an overlay.
 // The component is styled using Tailwind CSS for a modern and responsive design.   
-// FINAL FIXED MapContainer.js - Removes all conditional rendering issues
+// REPLACE: src/components/Map/MapContainer.js
+// CRITICAL FIX: Always renders map container div to prevent timing issues
 import React, { useRef, useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useGoogleMaps } from '../../hooks/useGoogleMaps';
@@ -19,7 +20,6 @@ const MapContainer = () => {
   const { selectedPlace } = useSelector(state => state.places);
   const { map, isLoaded, error, resetInitialization } = useGoogleMaps('google-map');
 
-  // Handle retry functionality
   const handleRetry = () => {
     console.log('🔄 MapContainer: Retrying map initialization...');
     setRetryCount(prev => prev + 1);
@@ -30,12 +30,12 @@ const MapContainer = () => {
     window.location.reload();
   };
 
-  // CRITICAL: ALWAYS render the map div - no conditional rendering at all
+  // 🚨 CRITICAL: ALWAYS render the map div - no conditional rendering at all
   return (
     <div className="relative w-full h-full map-container-parent">
       {/* 
-        🚨 CRITICAL: This div must ALWAYS be rendered 
-        Never wrap this in conditional logic 
+        ⚠️ IMPORTANT: This div must ALWAYS be rendered for Google Maps to initialize properly
+        Never wrap this in conditional logic or the map will fail to load
       */}
       <div 
         ref={mapContainerRef}
@@ -47,41 +47,42 @@ const MapContainer = () => {
           width: '100%',
           position: 'relative',
           overflow: 'hidden',
-          display: 'block !important',
-          visibility: 'visible !important',
-          backgroundColor: '#e5e7eb' // Fallback background
+          display: 'block' // Ensure always visible
         }}
-        data-testid="google-map-container"
-        role="application"
-        aria-label="Google Maps"
       />
       
-      {/* Error overlay - only shows on error */}
-      {error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-red-50 bg-opacity-95 rounded-lg">
-          <div className="text-center p-6 max-w-md">
-            <div className="text-red-600 text-4xl mb-4">⚠️</div>
-            <div className="text-red-700 font-semibold mb-2">Map Failed to Load</div>
-            <div className="text-red-600 text-sm mb-4">{error}</div>
-            
-            <div className="text-xs text-gray-600 mb-4 text-left bg-white p-3 rounded border">
-              <strong>Common Solutions:</strong><br/>
-              • Check API key restrictions in Google Cloud<br/>
-              • Verify internet connection<br/>
-              • Wait 5-10 minutes for Google changes to propagate<br/>
-              • Try temporarily removing all API restrictions
+      {/* Loading overlay - shows ON TOP of map div instead of replacing it */}
+      {!isLoaded && !error && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 rounded-lg z-10">
+          <div className="text-center">
+            <LoadingSpinner size="lg" />
+            <div className="mt-4 text-gray-600">Loading map...</div>
+            <div className="mt-2 text-sm text-gray-500">
+              Initializing Google Maps API
             </div>
-            
-            <div className="flex gap-2 justify-center">
+          </div>
+        </div>
+      )}
+      
+      {/* Error overlay - shows ON TOP when there's an error */}
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 rounded-lg z-10">
+          <div className="text-center p-6">
+            <div className="text-red-500 text-4xl mb-4">⚠️</div>
+            <div className="text-gray-600 mb-2 font-medium">Map initialization failed</div>
+            <div className="text-sm text-gray-500 mb-4 max-w-md">
+              {error}
+            </div>
+            <div className="space-x-2">
               <button 
                 onClick={handleRetry}
-                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors text-sm"
+                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
               >
-                Retry ({retryCount})
+                Retry {retryCount > 0 && `(${retryCount})`}
               </button>
               <button 
                 onClick={handleForceReload}
-                className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors text-sm"
+                className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
               >
                 Reload Page
               </button>
@@ -90,42 +91,28 @@ const MapContainer = () => {
         </div>
       )}
       
-      {/* Loading overlay - only shows when loading */}
-      {!isLoaded && !error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-100 bg-opacity-90 rounded-lg">
-          <div className="text-center">
-            <LoadingSpinner size="lg" />
-            <div className="mt-4 text-gray-600 font-medium">
-              Loading Google Maps...
-            </div>
-            <div className="mt-2 text-sm text-gray-500">
-              Initializing map and services
-            </div>
-            
-            {/* Progress indicator */}
-            <div className="mt-4 w-48 mx-auto">
-              <div className="bg-gray-200 rounded-full h-2">
-                <div 
-                  className="bg-blue-500 h-2 rounded-full transition-all duration-1000 animate-pulse"
-                  style={{ width: '70%' }}
-                />
-              </div>
-            </div>
-            
-            <div className="mt-3 text-xs text-gray-400">
-              Map Status: {isLoaded ? '✅ Loaded' : '⏳ Loading'} | 
-              Error: {error ? '❌ Yes' : '✅ None'}
-            </div>
+      {/* Debug info overlay - shows when map is loaded */}
+      {process.env.NODE_ENV === 'development' && isLoaded && !error && (
+        <div className="absolute top-4 right-4 bg-black bg-opacity-75 text-white text-xs p-2 rounded z-20">
+          <div className="font-mono">
+            Map: {isLoaded ? '✅ Loaded' : '⏳ Loading'} | 
+            Error: {error ? '❌ Yes' : '✅ None'} |
+            Selected: {selectedPlace ? '📍 Yes' : '➖ None'}
           </div>
         </div>
       )}
       
-      {/* Selected place info overlay - only shows when place is selected */}
+      {/* Selected place info overlay - shows when place is selected and auto-pinned */}
       {selectedPlace && isLoaded && !error && (
-        <div className="absolute bottom-4 left-4 right-4 bg-white rounded-lg shadow-lg p-4 max-w-sm mx-auto">
-          <h3 className="font-semibold text-gray-900 mb-1">
-            {selectedPlace.name}
-          </h3>
+        <div className="absolute bottom-4 left-4 right-4 bg-white rounded-lg shadow-lg p-4 max-w-sm mx-auto z-20">
+          <div className="flex items-start justify-between mb-2">
+            <h3 className="font-semibold text-gray-900 flex-1">
+              📍 {selectedPlace.name}
+            </h3>
+            <div className="ml-2 px-2 py-1 bg-green-100 text-green-700 text-xs rounded-full">
+              Auto-Pinned
+            </div>
+          </div>
           <p className="text-sm text-gray-600 mb-2">
             {selectedPlace.formatted_address}
           </p>
@@ -139,6 +126,11 @@ const MapContainer = () => {
                   {type.replace(/_/g, ' ')}
                 </span>
               ))}
+            </div>
+          )}
+          {selectedPlace.geometry && selectedPlace.geometry.location && (
+            <div className="mt-2 text-xs text-gray-500 font-mono">
+              {selectedPlace.geometry.location.lat.toFixed(4)}, {selectedPlace.geometry.location.lng.toFixed(4)}
             </div>
           )}
         </div>
