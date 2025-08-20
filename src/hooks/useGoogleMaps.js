@@ -1,12 +1,6 @@
-// This file is part of the Google Places Redux Saga project.
-// It defines a custom React hook for integrating Google Maps functionality into a React component. 
-// The hook initializes a Google Map instance, manages markers, and provides the current map state.
-// It uses the Google Maps JavaScript API and Redux for state management. 
-// The hook returns the map instance, a loading state, and the current markers on the map.
-// It also listens for changes in the selected place and updates the map accordingly.
-// REPLACE: src/hooks/useGoogleMaps.js
-// Enhanced hook with reliable initialization and auto-pinning functionality
-import { useEffect, useRef, useState, useCallback } from 'react';
+// FIXED: src/hooks/useGoogleMaps.js
+// Stable auto-pinning without Redux serialization issues
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import { googleMapsService } from '../services/googleMapsService';
 
@@ -14,84 +8,62 @@ export const useGoogleMaps = (containerId) => {
   const [map, setMap] = useState(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [error, setError] = useState(null);
+  
+  // Refs for managing map instances and markers
+  const mapInstanceRef = useRef(null);
   const markersRef = useRef([]);
   const initializationAttempted = useRef(false);
-  const mapInstanceRef = useRef(null);
+  const lastProcessedPlaceId = useRef(null); // Prevent duplicate processing
   
-  const { selectedPlace } = useSelector(state => state.places);
+  // Get selected place from Redux (now with serialized data)
+  const selectedPlace = useSelector(state => state.places.selectedPlace);
 
-  // Reset function for retries
-  const resetInitialization = useCallback(() => {
-    console.log('🔄 useGoogleMaps: Resetting initialization...');
-    initializationAttempted.current = false;
-    setError(null);
-    setIsLoaded(false);
-    setMap(null);
-    mapInstanceRef.current = null;
-    
-    // Clear existing markers
-    markersRef.current.forEach(marker => {
-      try {
-        marker.setMap(null);
-      } catch (e) {
-        console.warn('Could not clear marker:', e);
-      }
-    });
-    markersRef.current = [];
-  }, []);
-
-  // Enhanced initialization function with better error handling
+  // 🔧 STABLE MAP INITIALIZATION - Fixed timing issues
   const initMap = useCallback(async () => {
-    if (initializationAttempted.current) {
-      console.log('🛑 useGoogleMaps: Initialization already attempted');
+    if (!containerId || mapInstanceRef.current || initializationAttempted.current) {
       return;
     }
 
+    initializationAttempted.current = true;
     console.log('🗺️ useGoogleMaps: Starting map initialization...');
-    
+
     try {
-      initializationAttempted.current = true;
-      setError(null);
+      // Wait for DOM element with retries
+      let attempts = 0;
+      let mapElement = null;
       
-      // Step 1: Verify DOM element exists
-      const element = document.getElementById(containerId);
-      if (!element) {
-        throw new Error(`Element with id '${containerId}' not found in DOM`);
+      while (!mapElement && attempts < 50) { // Reduced attempts for faster feedback
+        mapElement = document.getElementById(containerId);
+        if (!mapElement) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          attempts++;
+        }
       }
 
-      console.log('✅ useGoogleMaps: DOM element found:', {
-        id: containerId,
-        width: element.offsetWidth,
-        height: element.offsetHeight,
-        visible: element.offsetParent !== null
-      });
-
-      // Step 2: Initialize Google Maps API through service
-      console.log('🚀 useGoogleMaps: Initializing Google Maps API...');
-      await googleMapsService.initialize();
-      
-      if (!googleMapsService.isReady()) {
-        throw new Error('Google Maps service is not ready after initialization');
+      if (!mapElement) {
+        throw new Error(`Map container '${containerId}' not found after ${attempts} attempts`);
       }
 
-      // Step 3: Create map instance with enhanced options
-      console.log('🗺️ useGoogleMaps: Creating map instance...');
+      // Initialize map with proper error handling
       const mapInstance = await googleMapsService.createMap(containerId, {
-        lat: 3.1390, // Default center: Malaysia
-        lng: 101.6869
+        center: { lat: 3.139, lng: 101.686 }, // Kuala Lumpur default
+        zoom: 11,
+        mapTypeControl: true,
+        streetViewControl: false,
+        fullscreenControl: true
       });
 
       if (!mapInstance) {
-        throw new Error('Failed to create map instance - createMap returned null');
+        throw new Error('Failed to create map instance');
       }
 
-      // Store map instance
+      // Store references
       mapInstanceRef.current = mapInstance;
       setMap(mapInstance);
       setIsLoaded(true);
       setError(null);
 
-      console.log('✅ useGoogleMaps: Map initialization completed successfully!');
+      console.log('✅ useGoogleMaps: Map initialized successfully!');
 
     } catch (error) {
       console.error('❌ useGoogleMaps: Map initialization failed:', error);
@@ -103,165 +75,156 @@ export const useGoogleMaps = (containerId) => {
     }
   }, [containerId]);
 
-  // Main initialization effect with improved timing
+  // Initialize map on mount
   useEffect(() => {
     if (!containerId || map || initializationAttempted.current) {
       return;
     }
 
-    // Use a short delay to ensure DOM is fully ready
+    // Small delay to ensure DOM is ready
     const initTimer = setTimeout(() => {
       initMap();
-    }, 150);
+    }, 100);
 
     return () => clearTimeout(initTimer);
   }, [containerId, map, initMap]);
 
-  // 🎯 CORE AUTO-PINNING FUNCTIONALITY
+  // 🎯 FIXED AUTO-PINNING - Stable and efficient
   useEffect(() => {
-    if (!map || !selectedPlace) {
+    if (!map || !selectedPlace || !selectedPlace.geometry?.location) {
       return;
     }
 
-    console.log('📍 useGoogleMaps: AUTO-PINNING triggered for place:', selectedPlace.name);
-
-    // Clear all existing markers first
-    markersRef.current.forEach(marker => {
-      try {
-        marker.setMap(null);
-      } catch (e) {
-        console.warn('Could not remove existing marker:', e);
-      }
-    });
-    markersRef.current = [];
-
-    // Check if place has geometry data for pinning
-    if (!selectedPlace.geometry || !selectedPlace.geometry.location) {
-      console.warn('⚠️ useGoogleMaps: Selected place has no geometry data for auto-pinning:', selectedPlace);
+    // Prevent duplicate processing of same place
+    const placeId = selectedPlace.place_id || selectedPlace.name;
+    if (placeId === lastProcessedPlaceId.current) {
+      console.log('🔄 useGoogleMaps: Skipping duplicate place processing');
       return;
-    }
-
-    try {
-      // Create new marker at selected location
-      const marker = googleMapsService.createMarker(
-        map,
-        selectedPlace.geometry.location,
-        selectedPlace.name || 'Selected Place'
-      );
-      
-      if (marker) {
-        // Store marker reference for cleanup
-        markersRef.current.push(marker);
-        
-        // Auto-center map to selected location
-        map.setCenter(selectedPlace.geometry.location);
-        
-        // Set appropriate zoom level
-        map.setZoom(15);
-        
-        // Add bounce animation for visual feedback
-        if (window.google?.maps?.Animation?.BOUNCE) {
-          marker.setAnimation(window.google.maps.Animation.BOUNCE);
-          
-          // Stop bouncing after 2 seconds
-          setTimeout(() => {
-            try {
-              marker.setAnimation(null);
-            } catch (e) {
-              console.warn('Could not stop marker animation:', e);
-            }
-          }, 2000);
-        }
-        
-        console.log('✅ useGoogleMaps: AUTO-PIN successful!', {
-          place: selectedPlace.name,
-          location: selectedPlace.geometry.location,
-          markerCreated: true,
-          mapCentered: true,
-          zoom: 15
-        });
-
-        // Optional: Add info window for enhanced UX
-        if (window.google?.maps?.InfoWindow) {
-          const infoWindow = new window.google.maps.InfoWindow({
-            content: `
-              <div style="padding: 8px; max-width: 200px;">
-                <h3 style="margin: 0 0 4px 0; font-size: 14px; font-weight: bold;">
-                  ${selectedPlace.name}
-                </h3>
-                ${selectedPlace.formatted_address ? 
-                  `<p style="margin: 0; font-size: 12px; color: #666;">
-                    ${selectedPlace.formatted_address}
-                   </p>` : ''
-                }
-              </div>
-            `
-          });
-
-          // Show info window briefly
-          infoWindow.open(map, marker);
-          
-          // Auto-close after 3 seconds
-          setTimeout(() => {
-            try {
-              infoWindow.close();
-            } catch (e) {
-              console.warn('Could not close info window:', e);
-            }
-          }, 3000);
-        }
-
-      } else {
-        console.error('❌ useGoogleMaps: Failed to create marker - createMarker returned null');
-      }
-      
-    } catch (error) {
-      console.error('❌ useGoogleMaps: Auto-pinning failed:', error);
     }
     
-  }, [map, selectedPlace]);
+    lastProcessedPlaceId.current = placeId;
+    console.log('📍 useGoogleMaps: AUTO-PINNING started for:', selectedPlace.name);
 
-  // Cleanup effect
-  useEffect(() => {
-    return () => {
-      console.log('🧹 useGoogleMaps: Cleaning up markers and map...');
-      
-      // Clear all markers
+    try {
+      // Clear existing markers
       markersRef.current.forEach(marker => {
         try {
-          marker.setMap(null);
+          if (marker && marker.setMap) {
+            marker.setMap(null);
+          }
         } catch (e) {
-          console.warn('Could not clear marker during cleanup:', e);
+          console.warn('Could not remove marker:', e);
         }
       });
       markersRef.current = [];
+
+      // Extract coordinates (now always serialized from Redux)
+      const location = selectedPlace.geometry.location;
+      const position = {
+        lat: location.lat,
+        lng: location.lng
+      };
+
+      console.log('📍 useGoogleMaps: Pinning location:', position);
+
+      // Create new marker
+      const marker = googleMapsService.createMarker(
+        map,
+        position,
+        selectedPlace.name || 'Selected Place'
+      );
+
+      if (marker) {
+        markersRef.current.push(marker);
+
+        // Center map to new location
+        map.setCenter(position);
+        map.setZoom(15);
+
+        // Add subtle bounce animation
+        if (window.google?.maps?.Animation?.BOUNCE) {
+          marker.setAnimation(window.google.maps.Animation.BOUNCE);
+          
+          // Stop bouncing after 1.5 seconds
+          setTimeout(() => {
+            try {
+              if (marker && marker.setAnimation) {
+                marker.setAnimation(null);
+              }
+            } catch (e) {
+              console.warn('Could not stop marker animation:', e);
+            }
+          }, 1500);
+        }
+
+        console.log('✅ useGoogleMaps: AUTO-PIN successful for:', selectedPlace.name);
+        
+      } else {
+        console.warn('⚠️ useGoogleMaps: Failed to create marker');
+      }
+
+    } catch (error) {
+      console.error('❌ useGoogleMaps: Auto-pinning failed:', error);
+      setError(`Auto-pinning failed: ${error.message}`);
+    }
+  }, [map, selectedPlace]); // Dependencies: map and selectedPlace
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      // Clean up markers
+      markersRef.current.forEach(marker => {
+        try {
+          if (marker && marker.setMap) {
+            marker.setMap(null);
+          }
+        } catch (e) {
+          console.warn('Cleanup error:', e);
+        }
+      });
       
-      // Clear map reference
+      // Reset refs
+      markersRef.current = [];
       mapInstanceRef.current = null;
+      lastProcessedPlaceId.current = null;
+      initializationAttempted.current = false;
     };
   }, []);
 
-  // Debug helper for development
-  useEffect(() => {
-    if (process.env.NODE_ENV === 'development') {
-      window.debugGoogleMaps = () => {
-        console.log('🔍 Google Maps Debug Info:', {
-          containerId,
-          mapLoaded: !!map,
-          isLoaded,
-          error,
-          selectedPlace: selectedPlace?.name || 'None',
-          markersCount: markersRef.current.length,
-          serviceStatus: googleMapsService.getStatus ? googleMapsService.getStatus() : 'Status unavailable'
-        });
-      };
-    }
-  }, [containerId, map, isLoaded, error, selectedPlace]);
-
+  // Return stable interface
   return {
     map,
     isLoaded,
     error,
-    resetInitialization
+    // Helper methods for external use
+    addMarker: useCallback((position, title) => {
+      if (!map) return null;
+      
+      const marker = googleMapsService.createMarker(map, position, title);
+      if (marker) {
+        markersRef.current.push(marker);
+      }
+      return marker;
+    }, [map]),
+    
+    clearMarkers: useCallback(() => {
+      markersRef.current.forEach(marker => {
+        try {
+          if (marker && marker.setMap) {
+            marker.setMap(null);
+          }
+        } catch (e) {
+          console.warn('Could not clear marker:', e);
+        }
+      });
+      markersRef.current = [];
+    }, []),
+    
+    centerMap: useCallback((position, zoom = 15) => {
+      if (map && position) {
+        map.setCenter(position);
+        map.setZoom(zoom);
+      }
+    }, [map])
   };
 };
