@@ -1,33 +1,112 @@
 // FIXED: src/store/sagas/placesSaga.js
-// Clean auto-pinning workflow without Redux serialization issues
-import { call, put, takeEvery, debounce, all, fork, delay } from 'redux-saga/effects';
+// Complete fix for Redux serialization and viewport issues
+import { call, put, takeEvery, debounce, all, delay } from 'redux-saga/effects';
 import {
   searchPlacesRequest,
   searchPlacesSuccess,
   searchPlacesFailure,
   selectPlace,
-  addToSearchHistory,
-  clearMarkers
+  addToSearchHistory
 } from '../slices/placesSlice';
 import { setSearchLoading, setMapLoading, setError } from '../slices/uiSlice';
 import { googleMapsService } from '../../services/googleMapsService';
 
-// 🎯 SIMPLIFIED AUTO-PINNING SAGA - No recursive issues
+// 🔧 CRITICAL: Helper function to serialize ALL Google Maps objects
+function serializeGoogleMapsGeometry(geometry) {
+  if (!geometry) return null;
+  
+  const serialized = {};
+  
+  // Serialize location
+  if (geometry.location) {
+    const loc = geometry.location;
+    serialized.location = {
+      lat: typeof loc.lat === 'function' ? loc.lat() : loc.lat,
+      lng: typeof loc.lng === 'function' ? loc.lng() : loc.lng
+    };
+  }
+  
+  // 🔥 CRITICAL FIX: Serialize viewport to prevent Redux errors
+  if (geometry.viewport) {
+    const viewport = geometry.viewport;
+    
+    // Extract bounds safely
+    if (viewport.getNorthEast && viewport.getSouthWest) {
+      const ne = viewport.getNorthEast();
+      const sw = viewport.getSouthWest();
+      
+      serialized.viewport = {
+        northeast: {
+          lat: typeof ne.lat === 'function' ? ne.lat() : ne.lat,
+          lng: typeof ne.lng === 'function' ? ne.lng() : ne.lng
+        },
+        southwest: {
+          lat: typeof sw.lat === 'function' ? sw.lat() : sw.lat,
+          lng: typeof sw.lng === 'function' ? sw.lng() : sw.lng
+        }
+      };
+    } else if (viewport.north !== undefined) {
+      // Handle different viewport format
+      serialized.viewport = {
+        northeast: { lat: viewport.north, lng: viewport.east },
+        southwest: { lat: viewport.south, lng: viewport.west }
+      };
+    }
+  }
+  
+  // Serialize bounds if present
+  if (geometry.bounds) {
+    const bounds = geometry.bounds;
+    if (bounds.getNorthEast && bounds.getSouthWest) {
+      const ne = bounds.getNorthEast();
+      const sw = bounds.getSouthWest();
+      
+      serialized.bounds = {
+        northeast: {
+          lat: typeof ne.lat === 'function' ? ne.lat() : ne.lat,
+          lng: typeof ne.lng === 'function' ? ne.lng() : ne.lng
+        },
+        southwest: {
+          lat: typeof sw.lat === 'function' ? sw.lat() : sw.lat,
+          lng: typeof sw.lng === 'function' ? sw.lng() : sw.lng
+        }
+      };
+    }
+  }
+  
+  return serialized;
+}
+
+// 🔧 Helper function to completely serialize place objects
+function serializePlaceObject(place) {
+  if (!place) return null;
+  
+  const serialized = {
+    ...place,
+    // Always serialize geometry completely
+    geometry: serializeGoogleMapsGeometry(place.geometry)
+  };
+  
+  // Remove any other potential non-serializable properties
+  delete serialized.map;
+  delete serialized.service;
+  
+  return serialized;
+}
+
+// 🎯 FIXED SELECT PLACE SAGA
 function* selectPlaceSaga(action) {
   try {
     console.log('🎯 Saga: AUTO-PINNING workflow started');
     
-    // Extract place and query from payload safely
     const payload = action.payload;
     let place, query;
     
     if (payload && typeof payload === 'object') {
       if (payload.place) {
-        // Structured payload: { place: x, query: y }
         place = payload.place;
         query = payload.query || '';
       } else {
-        // Direct place object
         place = payload;
         query = '';
       }
@@ -46,9 +125,9 @@ function* selectPlaceSaga(action) {
     yield put(setMapLoading(true));
     yield put(setError(null));
 
-    // 🔧 GET PLACE DETAILS if needed (with serialization)
     let processedPlace = place;
     
+    // Get place details if needed
     if (place.place_id && (!place.geometry || !place.geometry.location)) {
       console.log('📊 Saga: Fetching place details for geometry...');
       
@@ -56,24 +135,17 @@ function* selectPlaceSaga(action) {
         const placeDetails = yield call([googleMapsService, 'getPlaceDetails'], place.place_id);
         
         if (placeDetails?.geometry?.location) {
-          // 🔥 SERIALIZE IMMEDIATELY to prevent Redux issues
-          const location = placeDetails.geometry.location;
-          const serializedLocation = {
-            lat: typeof location.lat === 'function' ? location.lat() : location.lat,
-            lng: typeof location.lng === 'function' ? location.lng() : location.lng
-          };
-          
+          // Merge with existing place data
           processedPlace = {
             ...place,
             ...placeDetails,
-            geometry: {
-              ...placeDetails.geometry,
-              location: serializedLocation
-            },
             description: place.description || placeDetails.formatted_address
           };
           
-          console.log('✅ Saga: Serialized place details:', serializedLocation);
+          console.log('✅ Saga: Serialized place details:', {
+            lat: placeDetails.geometry.location.lat?.() || placeDetails.geometry.location.lat,
+            lng: placeDetails.geometry.location.lng?.() || placeDetails.geometry.location.lng
+          });
         }
       } catch (error) {
         console.error('❌ Saga: Place details failed:', error);
@@ -83,7 +155,7 @@ function* selectPlaceSaga(action) {
       }
     }
 
-    // 🔧 VALIDATE GEOMETRY DATA
+    // Validate geometry data
     if (!processedPlace.geometry?.location) {
       console.warn('⚠️ Saga: No geometry data for auto-pinning');
       yield put(setError('Selected place has no location data'));
@@ -91,48 +163,31 @@ function* selectPlaceSaga(action) {
       return;
     }
 
-    // Ensure location is properly serialized
-    const location = processedPlace.geometry.location;
-    const serializedLocation = {
-      lat: typeof location.lat === 'function' ? location.lat() : location.lat,
-      lng: typeof location.lng === 'function' ? location.lng() : location.lng
-    };
+    // 🔥 CRITICAL: FULLY serialize the place object
+    const fullySerializedPlace = serializePlaceObject(processedPlace);
 
-    const finalPlace = {
-      ...processedPlace,
-      geometry: {
-        ...processedPlace.geometry,
-        location: serializedLocation
-      }
-    };
-
-    console.log('📍 Saga: Final serialized place ready for auto-pinning:', {
-      name: finalPlace.name,
-      location: serializedLocation
+    console.log('📍 Saga: Final serialized place ready:', {
+      name: fullySerializedPlace.name,
+      location: fullySerializedPlace.geometry?.location,
+      hasViewport: !!fullySerializedPlace.geometry?.viewport
     });
 
-    // 🎯 DISPATCH SERIALIZED PLACE (triggers auto-pinning in useGoogleMaps)
-    // NOTE: We don't call selectPlace again - that would cause recursion
-    // Instead, we directly update the state via the reducer that's already running
-    
-    // 📚 ADD TO SEARCH HISTORY
-    if (query && finalPlace) {
+    // Add to search history with fully serialized data
+    if (query && fullySerializedPlace) {
       yield put(addToSearchHistory({
         query: query.trim(),
-        place: finalPlace,
+        place: fullySerializedPlace, // Now completely serialized
         timestamp: new Date().toISOString()
       }));
       console.log('📚 Saga: Added to search history');
     }
 
-    // 🎉 SUCCESS - Map will auto-pin via useGoogleMaps hook
-    yield delay(200); // Brief pause for UI feedback
+    yield delay(200);
     console.log('✅ Saga: AUTO-PINNING data prepared successfully');
     
   } catch (error) {
     console.error('❌ Saga: Auto-pinning workflow failed:', error);
     
-    // User-friendly error messages
     let userMessage = 'Failed to select place. Please try again.';
     
     if (error.message.includes('API key')) {
@@ -150,7 +205,7 @@ function* selectPlaceSaga(action) {
   }
 }
 
-// 🔍 IMPROVED SEARCH SAGA with debouncing
+// 🔍 FIXED SEARCH SAGA
 function* debouncedSearchSaga(action) {
   try {
     const { query } = action.payload;
@@ -164,27 +219,11 @@ function* debouncedSearchSaga(action) {
     yield put(setSearchLoading(true));
     yield put(setError(null));
     
-    // Search with timeout protection
     const places = yield call([googleMapsService, 'searchPlaces'], query.trim());
     
     if (Array.isArray(places)) {
-      // 🔥 SERIALIZE SEARCH RESULTS to prevent future Redux issues
-      const serializedPlaces = places.map(place => {
-        if (place.geometry?.location) {
-          const location = place.geometry.location;
-          return {
-            ...place,
-            geometry: {
-              ...place.geometry,
-              location: {
-                lat: typeof location.lat === 'function' ? location.lat() : location.lat,
-                lng: typeof location.lng === 'function' ? location.lng() : location.lng
-              }
-            }
-          };
-        }
-        return place;
-      });
+      // 🔥 Serialize all search results completely
+      const serializedPlaces = places.map(place => serializePlaceObject(place));
       
       yield put(searchPlacesSuccess(serializedPlaces));
       console.log(`✅ Saga: Found ${serializedPlaces.length} places`);
@@ -210,14 +249,11 @@ function* debouncedSearchSaga(action) {
   }
 }
 
-// 🚀 ROOT SAGA with proper error handling
+// Root saga
 function* placesSaga() {
   try {
     yield all([
-      // Debounced search - wait 500ms after user stops typing
       debounce(500, searchPlacesRequest.type, debouncedSearchSaga),
-      
-      // Immediate place selection for auto-pinning
       takeEvery(selectPlace.type, selectPlaceSaga)
     ]);
   } catch (error) {
