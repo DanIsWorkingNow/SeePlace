@@ -4,8 +4,7 @@
 // It uses the Google Maps JavaScript API and Redux for state management. 
 // The hook returns the map instance, a loading state, and the current markers on the map.
 // It also listens for changes in the selected place and updates the map accordingly.
-// Fixed useGoogleMaps.js - Resolves DOM timing issues
-// Fixed useGoogleMaps.js - Replace your ENTIRE src/hooks/useGoogleMaps.js with this
+// Fixed useGoogleMaps.js - Simplified and reliable
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import { googleMapsService } from '../services/googleMapsService';
@@ -21,54 +20,59 @@ export const useGoogleMaps = (containerId) => {
 
   // Reset function for retries
   const resetInitialization = useCallback(() => {
-    console.log('🔄 useGoogleMaps: Resetting initialization');
+    console.log('🔄 useGoogleMaps: Resetting initialization...');
     initializationAttempted.current = false;
     setError(null);
     setIsLoaded(false);
     setMap(null);
+    
+    // Clear existing markers
+    markersRef.current.forEach(marker => marker.setMap(null));
+    markersRef.current = [];
   }, []);
 
-  // Simplified initialization - element should always exist now
+  // Simplified initialization function
   const initMap = useCallback(async () => {
     if (initializationAttempted.current) {
-      console.log('🛑 useGoogleMaps: Already attempted, skipping');
+      console.log('🛑 useGoogleMaps: Initialization already attempted');
       return;
     }
-    
+
     console.log('🗺️ useGoogleMaps: Starting map initialization...');
-    initializationAttempted.current = true;
     
     try {
-      // Check if element exists
+      initializationAttempted.current = true;
+      
+      // Step 1: Check if element exists
       const element = document.getElementById(containerId);
       if (!element) {
         throw new Error(`Element with id '${containerId}' not found`);
       }
-      
+
       console.log('✅ useGoogleMaps: Element found:', element);
       console.log('✅ useGoogleMaps: Element dimensions:', {
         width: element.offsetWidth,
         height: element.offsetHeight,
-        visible: element.offsetWidth > 0 && element.offsetHeight > 0
+        visible: element.offsetParent !== null
       });
-      
-      // Initialize Google Maps API
+
+      // Step 2: Initialize Google Maps API
       console.log('🚀 useGoogleMaps: Initializing Google Maps API...');
       await googleMapsService.initialize();
-      
-      // Create map instance
+
+      // Step 3: Create map instance
       console.log('🗺️ useGoogleMaps: Creating map instance...');
-      const mapInstance = googleMapsService.createMap(containerId);
-      
+      const mapInstance = await googleMapsService.createMap(containerId);
+
       if (!mapInstance) {
         throw new Error('Failed to create map instance');
       }
-      
+
       console.log('✅ useGoogleMaps: Map created successfully!');
       setMap(mapInstance);
       setIsLoaded(true);
       setError(null);
-      
+
     } catch (error) {
       console.error('❌ useGoogleMaps: Failed to initialize map:', error);
       setError(error.message);
@@ -77,19 +81,21 @@ export const useGoogleMaps = (containerId) => {
     }
   }, [containerId]);
 
-  // Main initialization effect
+  // Main initialization effect - simplified timing
   useEffect(() => {
-    if (containerId && !map && !initializationAttempted.current) {
-      // Give a moment for the element to be fully rendered
-      const timer = setTimeout(() => {
-        initMap();
-      }, 200);
-      
-      return () => clearTimeout(timer);
+    if (!containerId || map || initializationAttempted.current) {
+      return;
     }
+
+    // Simple delay to ensure DOM is ready, then initialize
+    const timer = setTimeout(() => {
+      initMap();
+    }, 100);
+
+    return () => clearTimeout(timer);
   }, [containerId, map, initMap]);
 
-  // Handle selected place changes
+  // Handle selected place changes - add markers
   useEffect(() => {
     if (!map || !selectedPlace) return;
 
@@ -107,11 +113,12 @@ export const useGoogleMaps = (containerId) => {
           selectedPlace.name
         );
         
-        markersRef.current.push(marker);
-        map.setCenter(selectedPlace.geometry.location);
-        map.setZoom(15);
-        
-        console.log('✅ useGoogleMaps: Marker added successfully');
+        if (marker) {
+          markersRef.current.push(marker);
+          map.setCenter(selectedPlace.geometry.location);
+          map.setZoom(15);
+          console.log('✅ useGoogleMaps: Marker added successfully');
+        }
       } catch (error) {
         console.error('❌ useGoogleMaps: Failed to add marker:', error);
       }
@@ -121,6 +128,7 @@ export const useGoogleMaps = (containerId) => {
   // Cleanup effect
   useEffect(() => {
     return () => {
+      // Clear all markers on unmount
       markersRef.current.forEach(marker => marker.setMap(null));
       markersRef.current = [];
     };

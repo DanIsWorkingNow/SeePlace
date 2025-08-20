@@ -6,109 +6,78 @@
 // The component also handles loading states and errors related to the map initialization.  
 // The map is displayed within a responsive container, and the selected place's details are shown in an overlay.
 // The component is styled using Tailwind CSS for a modern and responsive design.   
-// Complete MapContainer.js - CRITICAL: This file must be updated for the fix to work
-// Complete MapContainer.js Solution - Replace your entire file with this
-// Complete MapContainer.js Solution - Replace your entire src/components/Map/MapContainer.js with this
-// FIXED MapContainer.js - Solves the chicken-and-egg problem
-// Replace your ENTIRE src/components/Map/MapContainer.js with this
-import React, { useEffect, useState, useRef } from 'react';
-import { useSelector } from 'react-redux';
+// Fixed MapContainer.js - Resolves DOM timing issues
+import React, { useRef, useEffect, useState } from 'react';
 import { useGoogleMaps } from '../../hooks/useGoogleMaps';
 import LoadingSpinner from '../common/LoadingSpinner';
 
 const MapContainer = () => {
-  const [mapError, setMapError] = useState(null);
-  const [isElementReady, setIsElementReady] = useState(false);
   const mapContainerRef = useRef(null);
-  const { selectedPlace } = useSelector(state => state.places);
-  const { mapLoading } = useSelector(state => state.ui);
+  const [isElementReady, setIsElementReady] = useState(false);
+  const [mapLoading, setMapLoading] = useState(true);
   
-  // Get error and reset function from the hook
-  const { isLoaded, error, resetInitialization } = useGoogleMaps('google-map');
+  // Use the Google Maps hook
+  const { map, isLoaded, error, resetInitialization } = useGoogleMaps('google-map');
 
-  // FIXED: Check element AFTER it's rendered (not before)
+  // Ensure element is ready before map initialization
   useEffect(() => {
-    // Small delay to ensure the div is in DOM after render
-    const timer = setTimeout(() => {
+    const checkElement = () => {
       const element = document.getElementById('google-map');
-      if (element) {
-        const isVisible = (
-          element.offsetWidth > 0 && 
-          element.offsetHeight > 0 && 
-          window.getComputedStyle(element).display !== 'none' &&
-          window.getComputedStyle(element).visibility !== 'hidden'
-        );
-        
-        setIsElementReady(isVisible);
+      if (element && element.offsetParent !== null) {
         console.log('🔍 MapContainer: Element check:', {
           exists: !!element,
-          visible: isVisible,
+          visible: element.offsetParent !== null,
           width: element.offsetWidth,
           height: element.offsetHeight,
           display: window.getComputedStyle(element).display,
           visibility: window.getComputedStyle(element).visibility
         });
+        setIsElementReady(true);
+        setMapLoading(false);
       } else {
-        console.log('❌ MapContainer: Element still not found after render');
-      }
-    }, 100);
-
-    return () => clearTimeout(timer);
-  }, []); // Run once after initial render
-
-  // Handle map errors
-  useEffect(() => {
-    const handleMapError = (event) => {
-      if (event.target.tagName === 'SCRIPT' && event.target.src.includes('maps.googleapis.com')) {
-        console.error('Google Maps script error:', event);
-        setMapError('Failed to load Google Maps. Please check your API key and internet connection.');
+        // Keep checking until element is ready
+        setTimeout(checkElement, 100);
       }
     };
-
-    window.addEventListener('error', handleMapError);
-    return () => window.removeEventListener('error', handleMapError);
+    
+    // Start checking after a small delay
+    setTimeout(checkElement, 50);
   }, []);
 
-  // Handle errors from the hook
-  useEffect(() => {
-    if (error) {
-      setMapError(`Map initialization failed: ${error}`);
-    } else {
-      setMapError(null);
-    }
-  }, [error]);
-
+  // Handle retry functionality
   const handleRetry = () => {
-    console.log('🔄 MapContainer: User triggered retry');
-    setMapError(null);
+    setMapLoading(true);
     setIsElementReady(false);
     resetInitialization();
     
-    // Re-check element after retry
+    // Force re-check element readiness
     setTimeout(() => {
       const element = document.getElementById('google-map');
-      if (element && element.offsetWidth > 0 && element.offsetHeight > 0) {
+      if (element) {
         setIsElementReady(true);
+        setMapLoading(false);
       }
     }, 100);
   };
 
   const handleForceReload = () => {
-    console.log('🔄 MapContainer: Force reloading page');
     window.location.reload();
   };
 
-  // Show error state
-  if (mapError) {
+  // Show error state with retry options
+  if (error && !mapLoading) {
     return (
-      <div className="w-full h-full flex items-center justify-center bg-gray-100 rounded-lg">
-        <div className="text-center p-6 max-w-md">
-          <div className="text-red-500 text-4xl mb-4">⚠️</div>
-          <div className="text-gray-800 font-semibold mb-2">Map Loading Failed</div>
-          <div className="text-gray-600 mb-4 text-sm">{mapError}</div>
+      <div className="w-full h-96 flex items-center justify-center bg-red-50 rounded-lg border border-red-200">
+        <div className="text-center p-6">
+          <div className="text-red-600 text-lg font-semibold mb-2">
+            Failed to Load Map
+          </div>
+          <div className="text-red-500 text-sm mb-4 max-w-md">
+            {error}
+          </div>
           
-          <div className="text-xs text-gray-500 mb-4 p-3 bg-gray-50 rounded border-l-4 border-blue-400">
-            <strong>Troubleshooting:</strong><br/>
+          <div className="text-xs text-gray-600 mb-4 text-left bg-gray-100 p-3 rounded border">
+            <strong>Troubleshooting Steps:</strong><br/>
             1. Check browser console for detailed errors<br/>
             2. Verify API key is valid<br/>
             3. Ensure internet connection is stable<br/>
@@ -184,71 +153,14 @@ const MapContainer = () => {
                 <div 
                   className="bg-blue-500 h-2 rounded-full transition-all duration-500"
                   style={{ 
-                    width: !isElementReady ? '20%' : mapLoading ? '60%' : '90%' 
+                    width: !isElementReady ? '20%' : mapLoading ? '60%' : '90%'
                   }}
                 />
               </div>
             </div>
-            
-            {/* Manual retry button */}
-            <button 
-              onClick={handleRetry}
-              className="mt-4 px-3 py-1 bg-gray-500 text-white rounded text-xs hover:bg-gray-600"
-            >
-              Force Retry
-            </button>
           </div>
         </div>
       )}
-      
-      {/* Selected place info overlay */}
-      {selectedPlace && isLoaded && (
-        <div className="absolute bottom-4 left-4 right-4 bg-white rounded-lg shadow-lg p-4 max-w-sm z-10">
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <h3 className="font-semibold text-gray-900 mb-1">
-                {selectedPlace.name}
-              </h3>
-              <p className="text-sm text-gray-600 mb-2">
-                {selectedPlace.formatted_address}
-              </p>
-              {selectedPlace.types && (
-                <div className="flex flex-wrap gap-1">
-                  {selectedPlace.types.slice(0, 3).map((type) => (
-                    <span 
-                      key={type}
-                      className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full"
-                    >
-                      {type.replace(/_/g, ' ')}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-            <button 
-              onClick={() => console.log('Place info panel closed')}
-              className="ml-2 text-gray-400 hover:text-gray-600 text-lg leading-none"
-              aria-label="Close place info"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      )}
-      
-      {/* Map controls */}
-      <div className="absolute top-4 right-4 z-10">
-        <div className="bg-white rounded-lg shadow-md p-2">
-          <button 
-            onClick={handleRetry}
-            className="p-2 text-gray-600 hover:text-gray-800 transition-colors"
-            title="Refresh map"
-            aria-label="Refresh map"
-          >
-            🔄
-          </button>
-        </div>
-      </div>
     </div>
   );
 };

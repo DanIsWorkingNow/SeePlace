@@ -46,15 +46,43 @@ code {
   display: block !important;
   visibility: visible !important;
   position: relative !important;
+  overflow: hidden !important;
 }
 
-/* Ensure parent containers don't interfere */
+/* Parent container fixes */
 .map-container-parent {
   height: 100% !important;
   min-height: 400px !important;
   position: relative !important;
 }
 
+/* Ensure proper map rendering */
+.gm-style {
+  font-family: inherit !important;
+}
+
+.gm-style div {
+  box-sizing: border-box !important;
+}
+
+/* Fix for IntersectionObserver issues */
+.gm-style img {
+  max-width: none !important;
+}
+
+/* Loading overlay positioning */
+.map-loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
 /* Fix potential Tailwind conflicts */
 .w-full.h-full {
   width: 100% !important;
