@@ -44,12 +44,19 @@ const PlaceAutocomplete = () => {
   };
 
   const handlePlaceSelect = (place) => {
-    selectPlace(place, query);
-    setQuery(place.description);
-    setShowSuggestions(false);
-    setFocusedIndex(-1);
-    inputRef.current?.blur();
-  };
+  console.log('🔍 PlaceAutocomplete: Selecting place:', place.name || place.description);
+  
+  // 🛠️ FIXED: Send structured payload with both place and query
+  selectPlace({
+    place: place,
+    query: query.trim()
+  });
+  
+  setQuery(place.description);
+  setShowSuggestions(false);
+  setFocusedIndex(-1);
+  inputRef.current?.blur();
+};
 
   const handleKeyDown = (e) => {
     if (!showSuggestions || suggestions.length === 0) return;
