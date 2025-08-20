@@ -1,7 +1,4 @@
-// This file is part of the Google Places Redux Saga project.
-// It defines the Redux slice for managing places-related state, including search suggestions, history, and map markers.    
-    
-// Enhanced placesSaga.js - Better error handling and debugging
+// FIXED placesSaga.js - Resolves method binding issues with Redux Saga
 import { 
   call, 
   put, 
@@ -54,13 +51,17 @@ function* debouncedSearchSaga(action) {
       throw new Error('Google Maps service is not available. Please refresh the page.');
     }
 
-    // Debug service status
-    const serviceStatus = googleMapsService.getStatus();
-    console.log('📊 Saga: Service status:', serviceStatus);
+    // Debug service status (safe way)
+    try {
+      const serviceStatus = googleMapsService.getStatus ? googleMapsService.getStatus() : 'Status method not available';
+      console.log('📊 Saga: Service status:', serviceStatus);
+    } catch (statusError) {
+      console.warn('⚠️ Saga: Could not get service status:', statusError.message);
+    }
     
-    // Make the API call
+    // FIXED: Use arrow function to preserve binding context
     console.log('🌐 Saga: Calling googleMapsService.searchPlaces()');
-    const places = yield call(googleMapsService.searchPlaces, query);
+    const places = yield call(() => googleMapsService.searchPlaces(query));
     
     console.log(`✅ Saga: Search successful, found ${places?.length || 0} places`);
     yield put(searchPlacesSuccess(places || []));
@@ -79,6 +80,8 @@ function* debouncedSearchSaga(action) {
       userMessage = 'Network error. Please check your internet connection.';
     } else if (error.message.includes('initialize')) {
       userMessage = 'Maps service initialization failed. Please refresh the page.';
+    } else if (error.message.includes('getState') || error.message.includes('null')) {
+      userMessage = 'Service initialization error. Refreshing the page may help.';
     }
     
     yield put(searchPlacesFailure(error.message));
@@ -107,7 +110,14 @@ function* selectPlaceSaga(action) {
       throw new Error('Google Maps service is not available');
     }
     
-    const placeDetails = yield call(googleMapsService.getPlaceDetails, place.place_id);
+    // FIXED: Use arrow function to preserve binding context
+    let placeDetails;
+    if (googleMapsService.getPlaceDetails) {
+      placeDetails = yield call(() => googleMapsService.getPlaceDetails(place.place_id));
+    } else {
+      // If getPlaceDetails doesn't exist, use the place data we have
+      placeDetails = place;
+    }
     
     if (!placeDetails) {
       throw new Error('No place details received from Google API');
@@ -205,7 +215,7 @@ function* watchSelectPlace() {
   yield takeEvery(selectPlace.type, selectPlaceSaga);
 }
 
-// Root saga with error handling
+// Root saga with enhanced error handling
 export default function* placesSaga() {
   try {
     console.log('🚀 Saga: Starting places saga');
@@ -221,14 +231,24 @@ export default function* placesSaga() {
   }
 }
 
-// Debug helper for saga monitoring
+// Enhanced debug helper for saga monitoring
 if (typeof window !== 'undefined') {
   window.debugPlacesSaga = () => {
     console.log('🔍 Places Saga Debug Info:');
     console.log('Service available:', !!googleMapsService);
     if (googleMapsService) {
-      console.log('Service status:', googleMapsService.getStatus());
-      console.log('Service ready:', googleMapsService.isReady());
+      try {
+        console.log('Service status:', googleMapsService.getStatus ? googleMapsService.getStatus() : 'Status method not available');
+        console.log('Service ready:', googleMapsService.isReady ? googleMapsService.isReady() : 'Ready method not available');
+      } catch (error) {
+        console.log('Service debug error:', error.message);
+      }
     }
+  };
+
+  window.testSagaSearch = (query = 'KLCC Malaysia') => {
+    console.log(`🧪 Testing saga search flow for: "${query}"`);
+    // This would require Redux store access to dispatch the action
+    console.log('💡 To test saga flow, type in the search box in the UI');
   };
 }
