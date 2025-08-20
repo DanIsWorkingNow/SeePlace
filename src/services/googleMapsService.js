@@ -1,4 +1,5 @@
-// CORRUPTION-PROOF googleMapsService.js - Handles all edge cases and service corruption
+// REPLACE: src/services/googleMapsService.js
+// CORRUPTION-PROOF googleMapsService.js - WITH getPlaceDetails for auto-pinning
 import { Loader } from '@googlemaps/js-api-loader';
 
 // Service state holder to prevent corruption
@@ -57,7 +58,7 @@ class GoogleMapsService {
       this.reset();
     }
 
-    if (state.isInitialized && state.google && state.autocompleteService) {
+    if (state.isInitialized && state.google && state.autocompleteService && state.placesService) {
       console.log('✅ GoogleMapsService: Already initialized and ready');
       return state.google;
     }
@@ -110,10 +111,13 @@ class GoogleMapsService {
       // Create AutocompleteService with protection against corruption
       await this._createAutocompleteService();
       
+      // 🆕 Create PlacesService for getPlaceDetails functionality
+      await this._createPlacesService();
+      
       ServiceState.isInitialized = true;
       ServiceState.initializationPromise = null;
       ServiceState.lastError = null;
-      console.log('🎉 Initialization completed successfully!');
+      console.log('🎉 Initialization completed successfully with Places support!');
       return ServiceState.google;
       
     } catch (error) {
@@ -124,6 +128,7 @@ class GoogleMapsService {
         ServiceState.isInitialized = false;
         ServiceState.initializationPromise = null;
         ServiceState.autocompleteService = null;
+        ServiceState.placesService = null;
         ServiceState.lastError = error;
       } catch (stateError) {
         console.error('❌ Failed to update state after error:', stateError);
@@ -178,6 +183,31 @@ class GoogleMapsService {
     } catch (error) {
       console.error('❌ AutocompleteService creation failed:', error);
       throw new Error('Failed to create AutocompleteService: ' + error.message);
+    }
+  }
+
+  // 🆕 NEW METHOD: Create PlacesService for place details
+  async _createPlacesService() {
+    try {
+      console.log('🔧 Creating PlacesService for place details...');
+      
+      if (!ServiceState.google || !ServiceState.google.maps || !ServiceState.google.maps.places) {
+        throw new Error('Google Maps Places not available for PlacesService creation');
+      }
+      
+      // Create a temporary div for PlacesService (required by Google API)
+      const tempDiv = document.createElement('div');
+      ServiceState.placesService = new ServiceState.google.maps.places.PlacesService(tempDiv);
+      
+      if (!ServiceState.placesService) {
+        throw new Error('PlacesService creation returned null/undefined');
+      }
+      
+      console.log('✅ PlacesService created successfully');
+      
+    } catch (error) {
+      console.error('❌ PlacesService creation failed:', error);
+      throw new Error('Failed to create PlacesService: ' + error.message);
     }
   }
 
@@ -323,6 +353,121 @@ class GoogleMapsService {
     }
   }
 
+  // 🎯 CRITICAL NEW METHOD: Get place details with geometry for auto-pinning
+  async getPlaceDetails(placeId) {
+    try {
+      console.log(`🏢 Getting place details for: ${placeId}`);
+      
+      if (!placeId) {
+        throw new Error('Place ID is required for getPlaceDetails');
+      }
+
+      const state = this.getState();
+      
+      if (state.isCorrupted) {
+        console.log('🔄 State corrupted during place details, attempting reset...');
+        this.reset();
+        throw new Error('Service state corrupted');
+      }
+
+      // Ensure service is initialized
+      if (!state.isInitialized || !state.placesService) {
+        console.log('🔄 PlacesService not ready, initializing...');
+        try {
+          await this.initialize();
+        } catch (initError) {
+          console.error('❌ Initialization failed during place details:', initError);
+          throw new Error('Failed to initialize PlacesService');
+        }
+      }
+
+      // Final safety check
+      const currentState = this.getState();
+      if (!currentState.placesService) {
+        throw new Error('PlacesService not available after initialization');
+      }
+
+      console.log('📋 Making Place Details API request...');
+      
+      return new Promise((resolve, reject) => {
+        try {
+          currentState.placesService.getDetails(
+            {
+              placeId: placeId,
+              fields: [
+                'name', 
+                'geometry', 
+                'formatted_address', 
+                'place_id', 
+                'types', 
+                'photos', 
+                'rating', 
+                'user_ratings_total',
+                'vicinity'
+              ]
+            },
+            (place, status) => {
+              console.log(`📋 Place Details API Response - Status: ${status}`);
+              
+              const state = this.getState();
+              if (!state.google || !state.google.maps || !state.google.maps.places) {
+                console.error('❌ Google Maps objects corrupted during place details callback');
+                reject(new Error('Google Maps service corrupted'));
+                return;
+              }
+
+              const PlacesServiceStatus = state.google.maps.places.PlacesServiceStatus;
+              
+              switch (status) {
+                case PlacesServiceStatus.OK:
+                  if (place && place.geometry && place.geometry.location) {
+                    console.log('✅ Place details retrieved successfully');
+                    console.log('📍 Geometry:', place.geometry.location.toString());
+                    resolve(place);
+                  } else {
+                    console.warn('⚠️ Place details missing geometry data');
+                    reject(new Error('Place details missing geometry data'));
+                  }
+                  break;
+                  
+                case PlacesServiceStatus.NOT_FOUND:
+                  console.warn('⚠️ Place not found');
+                  reject(new Error('Place not found'));
+                  break;
+                  
+                case PlacesServiceStatus.REQUEST_DENIED:
+                  console.warn('⚠️ Place Details REQUEST_DENIED - Check if Places API (New) is enabled');
+                  reject(new Error('Place Details API request denied'));
+                  break;
+                  
+                case PlacesServiceStatus.INVALID_REQUEST:
+                  console.warn('⚠️ Invalid place details request');
+                  reject(new Error('Invalid place details request'));
+                  break;
+                  
+                case PlacesServiceStatus.OVER_QUERY_LIMIT:
+                  console.warn('⚠️ Place details query limit exceeded');
+                  reject(new Error('Place details quota exceeded'));
+                  break;
+                  
+                default:
+                  console.warn(`⚠️ Unexpected place details status: ${status}`);
+                  reject(new Error(`Place details API error: ${status}`));
+              }
+            }
+          );
+        } catch (callError) {
+          console.error('❌ Error making place details API call:', callError);
+          reject(new Error('Place details API call failed'));
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Place details error:', error);
+      throw error;
+    }
+  }
+
   async createMap(elementId, center = { lat: 3.1390, lng: 101.6869 }) {
     try {
       console.log(`🗺️ Creating map for element: ${elementId}`);
@@ -390,7 +535,8 @@ class GoogleMapsService {
            state.google && 
            state.google.maps && 
            state.google.maps.places && 
-           state.autocompleteService;
+           state.autocompleteService &&
+           state.placesService;  // 🆕 Added placesService check
   }
 
   getStatus() {
@@ -400,6 +546,7 @@ class GoogleMapsService {
       hasGoogle: !!state.google,
       hasPlaces: !!(state.google && state.google.maps && state.google.maps.places),
       hasAutocompleteService: !!state.autocompleteService,
+      hasPlacesService: !!state.placesService,  // 🆕 Added placesService status
       isReady: this.isReady(),
       isCorrupted: state.isCorrupted,
       lastError: state.lastError?.message || null
@@ -442,6 +589,7 @@ try {
   // Create a safe fallback service
   googleMapsService = {
     searchPlaces: () => Promise.resolve([]),
+    getPlaceDetails: () => Promise.reject(new Error('Service unavailable')),  // 🆕 Added fallback
     initialize: () => Promise.resolve(null),
     createMap: () => Promise.reject(new Error('Service unavailable')),
     createMarker: () => null,
@@ -484,6 +632,20 @@ if (typeof window !== 'undefined') {
     } catch (error) {
       console.error('❌ Test failed:', error);
       return [];
+    }
+  };
+
+  // 🆕 NEW: Test place details functionality
+  window.testPlaceDetails = async (placeId = 'ChIJRzxL8BC4zDERdU3yFGBfMLs') => {
+    console.log(`🧪 Testing place details for: ${placeId}`);
+    try {
+      const details = await googleMapsService.getPlaceDetails(placeId);
+      console.log('✅ Place details:', details);
+      console.log('📍 Geometry:', details.geometry?.location?.toString());
+      return details;
+    } catch (error) {
+      console.error('❌ Place details test failed:', error);
+      return null;
     }
   };
 
