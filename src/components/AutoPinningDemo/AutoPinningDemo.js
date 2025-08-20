@@ -1,5 +1,5 @@
-
-// Demo component to test and demonstrate auto-pinning functionality
+// UPDATE: src/components/AutoPinningDemo/AutoPinningDemo.js
+// Fixed to dispatch selectPlace with proper payload format
 import React, { useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { selectPlace } from '../../store/slices/placesSlice';
@@ -75,13 +75,14 @@ const AutoPinningDemo = () => {
     }
   ];
 
+  // 🛠️ FIXED: Dispatch selectPlace with proper format for saga
   const handleTestAutoPin = (place) => {
-    console.log('🧪 Testing auto-pinning with place:', place.name);
+    console.log('🧪 AutoPinningDemo: Testing auto-pinning with place:', place.name);
     
     // Store the tested place for UI feedback
     setLastTestedPlace(place);
     
-    // Dispatch selectPlace action - this should trigger auto-pinning workflow
+    // Dispatch selectPlace with place object directly (saga handles this format)
     dispatch(selectPlace(place));
     
     // Log the expected behavior for debugging
@@ -158,7 +159,10 @@ const AutoPinningDemo = () => {
                   </div>
                   {selectedPlace.geometry && (
                     <div className="text-xs text-green-600 font-mono mt-1">
-                      {selectedPlace.geometry.location.lat.toFixed(4)}, {selectedPlace.geometry.location.lng.toFixed(4)}
+                      {typeof selectedPlace.geometry.location.lat === 'function' 
+                        ? `${selectedPlace.geometry.location.lat().toFixed(4)}, ${selectedPlace.geometry.location.lng().toFixed(4)}`
+                        : `${selectedPlace.geometry.location.lat.toFixed(4)}, ${selectedPlace.geometry.location.lng.toFixed(4)}`
+                      }
                     </div>
                   )}
                 </div>
@@ -247,8 +251,8 @@ const AutoPinningDemo = () => {
                   <strong>Debug Functions Available:</strong>
                   <ul className="ml-4 mt-1 space-y-1">
                     <li>• <code>window.debugAutoPinning()</code> - Check auto-pinning status</li>
-                    <li>• <code>window.debugGoogleMaps()</code> - Check map status</li>
-                    <li>• <code>window.debugSearchWorkflow()</code> - Check search status</li>
+                    <li>• <code>window.debugGoogleMapsService()</code> - Check service status</li>
+                    <li>• <code>window.testPlaceDetails()</code> - Test place details API</li>
                   </ul>
                 </div>
                 <div className="text-xs text-yellow-600 mt-2">

@@ -1,5 +1,5 @@
-
-// Enhanced Places Saga with complete auto-pinning workflow and error handling
+// REPLACE: src/store/sagas/placesSaga.js
+// Enhanced Places Saga with FIXED payload handling for auto-pinning
 import { call, put, take, takeEvery, debounce, all, fork, cancel, delay } from 'redux-saga/effects';
 import {
   searchPlacesRequest,
@@ -14,17 +14,38 @@ import {
 import { setSearchLoading, setMapLoading, setError } from '../slices/uiSlice';
 import { googleMapsService } from '../../services/googleMapsService';
 
-// 🎯 CORE AUTO-PINNING SAGA - Handles place selection and automatic map updating
+// 🎯 CORE AUTO-PINNING SAGA - FIXED payload handling
 function* selectPlaceSaga(action) {
   try {
-    console.log('🎯 Saga: AUTO-PINNING workflow started for place:', action.payload.place?.name);
+    console.log('🎯 Saga: AUTO-PINNING workflow started');
+    console.log('🔍 Saga: Action payload:', action.payload);
     
-    const { place, query } = action.payload;
+    // 🛠️ FIXED: Handle both payload formats
+    let place, query;
+    
+    if (action.payload && typeof action.payload === 'object') {
+      // Check if payload has place and query properties (from autocomplete with query)
+      if (action.payload.place) {
+        place = action.payload.place;
+        query = action.payload.query;
+        console.log('📝 Saga: Using structured payload with query');
+      } else {
+        // Payload is the place object directly (from demo or direct dispatch)
+        place = action.payload;
+        query = null;
+        console.log('📝 Saga: Using direct place payload');
+      }
+    } else {
+      console.warn('⚠️ Saga: Invalid payload format');
+      return;
+    }
     
     if (!place) {
       console.warn('⚠️ Saga: No place provided for selection');
       return;
     }
+    
+    console.log('📍 Saga: Processing place:', place.name || place.description);
     
     // Step 1: Set loading state for map updates
     yield put(setMapLoading(true));
@@ -38,21 +59,25 @@ function* selectPlaceSaga(action) {
       try {
         const placeDetails = yield call([googleMapsService, 'getPlaceDetails'], place.place_id);
         
-        if (placeDetails && placeDetails.geometry) {
+        if (placeDetails && placeDetails.geometry && placeDetails.geometry.location) {
           detailedPlace = {
             ...place,
             ...placeDetails,
             // Preserve original description if available
             description: place.description || placeDetails.formatted_address
           };
-          console.log('✅ Saga: Got detailed place data with geometry:', detailedPlace.geometry.location);
+          console.log('✅ Saga: Got detailed place data with geometry:', {
+            lat: placeDetails.geometry.location.lat(),
+            lng: placeDetails.geometry.location.lng()
+          });
         } else {
           console.warn('⚠️ Saga: Place details API returned no geometry data');
         }
         
       } catch (error) {
-        console.warn('⚠️ Saga: Could not get place details:', error.message);
-        // Continue with original place data - auto-pinning might still work if it has geometry
+        console.error('❌ Saga: Could not get place details:', error.message);
+        yield put(setError('Could not get location details for this place'));
+        return;
       }
     }
     
@@ -60,11 +85,21 @@ function* selectPlaceSaga(action) {
     if (!detailedPlace.geometry || !detailedPlace.geometry.location) {
       console.warn('⚠️ Saga: Cannot auto-pin - place has no geometry data:', detailedPlace);
       yield put(setError('Selected place has no location data for mapping'));
+      return;
     } else {
-      console.log('📍 Saga: Place has valid geometry for auto-pinning:', {
-        lat: detailedPlace.geometry.location.lat,
-        lng: detailedPlace.geometry.location.lng
-      });
+      // Handle both LatLng objects and plain objects
+      let lat, lng;
+      if (typeof detailedPlace.geometry.location.lat === 'function') {
+        // Google Maps LatLng object
+        lat = detailedPlace.geometry.location.lat();
+        lng = detailedPlace.geometry.location.lng();
+      } else {
+        // Plain object
+        lat = detailedPlace.geometry.location.lat;
+        lng = detailedPlace.geometry.location.lng;
+      }
+      
+      console.log('📍 Saga: Place has valid geometry for auto-pinning:', { lat, lng });
     }
     
     // Step 4: Update Redux state with selected place (triggers auto-pinning in useGoogleMaps)
@@ -100,6 +135,8 @@ function* selectPlaceSaga(action) {
       userMessage = 'Network error. Please check your internet connection.';
     } else if (error.message.includes('permission')) {
       userMessage = 'API permission denied. Please check your Google Maps API setup.';
+    } else if (error.message.includes('Service unavailable')) {
+      userMessage = 'Google Maps service unavailable. Please try again.';
     }
     
     yield put(setError(userMessage));
@@ -195,6 +232,7 @@ function* watchSelectPlace() {
 // Optional: Watch for map updates to log auto-pinning success
 function* watchMapUpdates() {
   console.log('👀 Saga: Starting map updates watcher');
+  yield; // Add yield to fix generator function warning
   // This can be used to track when markers are added/removed
   // yield takeEvery([addMarker.type, clearMarkers.type], function* (action) {
   //   console.log('🗺️ Saga: Map update detected:', action.type);
