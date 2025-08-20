@@ -4,6 +4,8 @@
 // It uses Redux Toolkit's `useSelector` and `useDispatch` hooks to interact with the Redux store.
 // The hook returns the current state of suggestions, search history, selected place, markers, and loading/error states,
 // along with the functions to perform actions related to places.   
+// REPLACE: src/hooks/usePlaces.js
+// Fixed usePlaces hook - corrected selectPlace payload handling to fix auto-pinning
 import { useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { 
@@ -33,8 +35,24 @@ export const usePlaces = () => {
     dispatch(searchPlacesRequest({ query }));
   }, [dispatch]);
 
-  const selectPlace = useCallback((place, query = '') => {
-    dispatch(selectPlaceAction({ place, query }));
+  // 🛠️ CRITICAL FIX: Prevent double-wrapping of payload
+  const selectPlace = useCallback((placeOrPayload, query = '') => {
+    console.log('🔍 usePlaces: selectPlace called with:', { placeOrPayload, query });
+    
+    // Check if first argument is already a structured payload object
+    if (placeOrPayload && typeof placeOrPayload === 'object' && placeOrPayload.place) {
+      // New format: { place: actualPlace, query: actualQuery }
+      // Pass it directly without wrapping again
+      console.log('📝 usePlaces: Using structured payload format - passing directly');
+      dispatch(selectPlaceAction(placeOrPayload));
+    } else {
+      // Old format: (place, query) - wrap it properly
+      console.log('📝 usePlaces: Using legacy format, creating structured payload');
+      dispatch(selectPlaceAction({ 
+        place: placeOrPayload, 
+        query: query || '' 
+      }));
+    }
   }, [dispatch]);
 
   const clearSuggestionsList = useCallback(() => {
