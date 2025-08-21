@@ -420,7 +420,7 @@ class GoogleMapsService {
         const primaryRequest = {
           input: query,
           types: ['establishment', 'geocode'],
-          componentRestrictions: { country: 'my' }, // Malaysia
+        
           sessionToken: sessionToken
         };
 
@@ -486,7 +486,7 @@ class GoogleMapsService {
         const supplementaryRequest = {
           input: query,
           types: ['locality', 'sublocality', 'neighborhood'], // Different types
-          componentRestrictions: { country: 'my' },
+         
           sessionToken: new currentState.google.maps.places.AutocompleteSessionToken()
         };
 
