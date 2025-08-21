@@ -251,9 +251,10 @@ class GoogleMapsService {
     });
   }
 
+  // 🔥 ENHANCED: Replace the searchPlaces method around line 300-400
   async searchPlaces(query) {
     try {
-      console.log(`🔍 Searching for: "${query}"`);
+      console.log(`🔍 Searching for: "${query}" (targeting up to 10 results)`);
       
       // Input validation
       if (!query || typeof query !== 'string' || query.trim().length < 2) {
@@ -287,65 +288,12 @@ class GoogleMapsService {
         return [];
       }
 
-      console.log('🌐 Making Places API request...');
+      console.log('🌐 Making Enhanced Places API request...');
       
-      return new Promise((resolve) => {
-        try {
-          currentState.autocompleteService.getPlacePredictions(
-            {
-              input: query.trim(),
-              types: ['establishment', 'geocode'],
-              
-            },
-            (predictions, status) => {
-              console.log(`📊 API Response - Status: ${status}`);
-              
-              const state = this.getState();
-              if (!state.google || !state.google.maps || !state.google.maps.places) {
-                console.error('❌ Google Maps objects corrupted during callback');
-                resolve([]);
-                return;
-              }
-
-              const PlacesServiceStatus = state.google.maps.places.PlacesServiceStatus;
-              
-              switch (status) {
-                case PlacesServiceStatus.OK:
-                  console.log(`✅ Found ${predictions?.length || 0} predictions`);
-                  resolve(predictions || []);
-                  break;
-                  
-                case PlacesServiceStatus.ZERO_RESULTS:
-                  console.log('📭 No results found');
-                  resolve([]);
-                  break;
-                  
-                case PlacesServiceStatus.REQUEST_DENIED:
-                  console.warn('⚠️ REQUEST_DENIED - Check if original Places API is enabled in Google Cloud Console');
-                  resolve([]);
-                  break;
-                  
-                case PlacesServiceStatus.INVALID_REQUEST:
-                  console.warn('⚠️ Invalid request parameters');
-                  resolve([]);
-                  break;
-                  
-                case PlacesServiceStatus.OVER_QUERY_LIMIT:
-                  console.warn('⚠️ Query limit exceeded - check billing');
-                  resolve([]);
-                  break;
-                  
-                default:
-                  console.warn(`⚠️ Unexpected API status: ${status}`);
-                  resolve([]);
-              }
-            }
-          );
-        } catch (callError) {
-          console.error('❌ Error making API call:', callError);
-          resolve([]);
-        }
-      });
+      // 🔥 NEW: Enhanced search to get up to 10 results
+      const results = await this._getEnhancedSearchResults(query.trim());
+      console.log(`✅ Enhanced search found ${results.length} total results`);
+      return results;
 
     } catch (error) {
       console.error('❌ Search error:', error);
@@ -353,8 +301,8 @@ class GoogleMapsService {
     }
   }
 
-  // 🎯 CRITICAL NEW METHOD: Get place details with geometry for auto-pinning
-  async getPlaceDetails(placeId) {
+  //Very Crucial Method
+   async getPlaceDetails(placeId) {
     try {
       console.log(`🏢 Getting place details for: ${placeId}`);
       
@@ -422,7 +370,6 @@ class GoogleMapsService {
                 case PlacesServiceStatus.OK:
                   if (place && place.geometry && place.geometry.location) {
                     console.log('✅ Place details retrieved successfully');
-                    console.log('📍 Geometry:', place.geometry.location.toString());
                     resolve(place);
                   } else {
                     console.warn('⚠️ Place details missing geometry data');
@@ -438,16 +385,6 @@ class GoogleMapsService {
                 case PlacesServiceStatus.REQUEST_DENIED:
                   console.warn('⚠️ Place Details REQUEST_DENIED - Check if Places API (New) is enabled');
                   reject(new Error('Place Details API request denied'));
-                  break;
-                  
-                case PlacesServiceStatus.INVALID_REQUEST:
-                  console.warn('⚠️ Invalid place details request');
-                  reject(new Error('Invalid place details request'));
-                  break;
-                  
-                case PlacesServiceStatus.OVER_QUERY_LIMIT:
-                  console.warn('⚠️ Place details query limit exceeded');
-                  reject(new Error('Place details quota exceeded'));
                   break;
                   
                 default:
@@ -466,6 +403,134 @@ class GoogleMapsService {
       console.error('❌ Place details error:', error);
       throw error;
     }
+  }
+
+ // 🔥 NEW METHODS: Add these after your getPlaceDetails method
+
+  // Enhanced search method to get up to 10 results
+  async _getEnhancedSearchResults(query) {
+    const currentState = this.getState();
+    
+    return new Promise((resolve) => {
+      try {
+        // Create session token for better performance
+        const sessionToken = new currentState.google.maps.places.AutocompleteSessionToken();
+        
+        // Primary search request
+        const primaryRequest = {
+          input: query,
+          types: ['establishment', 'geocode'],
+          componentRestrictions: { country: 'my' }, // Malaysia
+          sessionToken: sessionToken
+        };
+
+        currentState.autocompleteService.getPlacePredictions(
+          primaryRequest,
+          async (predictions, status) => {
+            console.log(`📊 Primary API Response - Status: ${status}, Results: ${predictions?.length || 0}`);
+            
+            const state = this.getState();
+            if (!state.google || !state.google.maps || !state.google.maps.places) {
+              console.error('❌ Google Maps objects corrupted during callback');
+              resolve([]);
+              return;
+            }
+
+            const PlacesServiceStatus = state.google.maps.places.PlacesServiceStatus;
+            
+            if (status === PlacesServiceStatus.OK && predictions) {
+              // 🔥 ENHANCEMENT: If we got less than 8 results, try to get more
+              if (predictions.length < 8) {
+                console.log(`🔍 Got ${predictions.length} results, attempting to find more...`);
+                try {
+                  const supplementaryResults = await this._getSupplementaryResults(query, predictions);
+                  const combinedResults = this._mergeAndDeduplicateResults(predictions, supplementaryResults);
+                  const finalResults = combinedResults.slice(0, 10); // Limit to 10
+                  
+                  console.log(`🎯 Enhanced: ${predictions.length} primary + ${supplementaryResults.length} supplementary = ${finalResults.length} total`);
+                  resolve(finalResults);
+                } catch (enhanceError) {
+                  console.warn('⚠️ Supplementary search failed, using primary results only:', enhanceError);
+                  resolve(predictions || []);
+                }
+              } else {
+                // Already got good results
+                const limitedResults = predictions.slice(0, 10);
+                console.log(`✅ Primary search sufficient: ${limitedResults.length} results`);
+                resolve(limitedResults);
+              }
+              
+            } else if (status === PlacesServiceStatus.ZERO_RESULTS) {
+              console.log('📭 No results found');
+              resolve([]);
+            } else {
+              console.warn(`⚠️ API returned status: ${status}`);
+              resolve([]);
+            }
+          }
+        );
+      } catch (callError) {
+        console.error('❌ Enhanced search API call failed:', callError);
+        resolve([]);
+      }
+    });
+  }
+
+  // Get supplementary results using different search parameters
+  async _getSupplementaryResults(query, existingPredictions) {
+    const currentState = this.getState();
+    
+    return new Promise((resolve) => {
+      try {
+        // Use broader search types to find more results
+        const supplementaryRequest = {
+          input: query,
+          types: ['locality', 'sublocality', 'neighborhood'], // Different types
+          componentRestrictions: { country: 'my' },
+          sessionToken: new currentState.google.maps.places.AutocompleteSessionToken()
+        };
+
+        currentState.autocompleteService.getPlacePredictions(
+          supplementaryRequest,
+          (predictions, status) => {
+            if (status === currentState.google.maps.places.PlacesServiceStatus.OK && predictions) {
+              console.log(`📋 Supplementary search found ${predictions.length} additional results`);
+              resolve(predictions);
+            } else {
+              console.log('📭 No supplementary results found');
+              resolve([]);
+            }
+          }
+        );
+      } catch (error) {
+        console.warn('⚠️ Supplementary search error:', error);
+        resolve([]);
+      }
+    });
+  }
+
+  // Merge and deduplicate results
+  _mergeAndDeduplicateResults(primary, supplementary) {
+    const seen = new Set();
+    const merged = [];
+    
+    // Add primary results first (higher priority)
+    primary.forEach(prediction => {
+      if (!seen.has(prediction.place_id)) {
+        seen.add(prediction.place_id);
+        merged.push(prediction);
+      }
+    });
+    
+    // Add supplementary results that aren't duplicates
+    supplementary.forEach(prediction => {
+      if (!seen.has(prediction.place_id) && merged.length < 10) {
+        seen.add(prediction.place_id);
+        merged.push(prediction);
+      }
+    });
+    
+    return merged;
   }
 
   async createMap(elementId, center = { lat: 3.1390, lng: 101.6869 }) {
