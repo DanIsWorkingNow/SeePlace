@@ -295,7 +295,7 @@ class GoogleMapsService {
             {
               input: query.trim(),
               types: ['establishment', 'geocode'],
-              componentRestrictions: { country: 'my' } // Malaysia
+              
             },
             (predictions, status) => {
               console.log(`📊 API Response - Status: ${status}`);
