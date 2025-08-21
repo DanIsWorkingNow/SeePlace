@@ -1,5 +1,5 @@
 // FIXED: src/store/sagas/placesSaga.js
-// Complete fix for Redux serialization and viewport issues
+// Complete fix for Redux serialization including photo objects
 import { call, put, takeEvery, debounce, all, delay } from 'redux-saga/effects';
 import {
   searchPlacesRequest,
@@ -81,15 +81,63 @@ function serializeGoogleMapsGeometry(geometry) {
 function serializePlaceObject(place) {
   if (!place) return null;
   
+  // Start with basic place data
   const serialized = {
-    ...place,
-    // Always serialize geometry completely
-    geometry: serializeGoogleMapsGeometry(place.geometry)
+    place_id: place.place_id,
+    name: place.name,
+    description: place.description,
+    formatted_address: place.formatted_address,
+    types: place.types || [],
+    rating: place.rating,
+    user_ratings_total: place.user_ratings_total
   };
   
-  // Remove any other potential non-serializable properties
-  delete serialized.map;
-  delete serialized.service;
+  // 🔥 CRITICAL FIX: Serialize photos to remove getUrl functions
+  if (place.photos && Array.isArray(place.photos)) {
+    serialized.photos = place.photos.slice(0, 3).map((photo, index) => {
+      if (photo && typeof photo === 'object') {
+        // Only store basic metadata, no functions
+        return {
+          id: `photo_${place.place_id || 'unknown'}_${index}`,
+          width: photo.width || 400,
+          height: photo.height || 300,
+          html_attributions: Array.isArray(photo.html_attributions) ? photo.html_attributions : []
+          // Removed: getUrl function, photo_reference (these are not serializable)
+        };
+      }
+      return null;
+    }).filter(Boolean);
+  } else {
+    serialized.photos = [];
+  }
+  
+  // Always serialize geometry completely
+  if (place.geometry) {
+    serialized.geometry = serializeGoogleMapsGeometry(place.geometry);
+  }
+  
+  // 🔧 Remove any remaining non-serializable properties
+  Object.keys(place).forEach(key => {
+    const value = place[key];
+    
+    // Skip already processed properties
+    if (['place_id', 'name', 'description', 'formatted_address', 'types', 'rating', 'user_ratings_total', 'photos', 'geometry'].includes(key)) {
+      return;
+    }
+    
+    // Only add serializable values
+    if (value !== null && value !== undefined) {
+      if (typeof value === 'function') {
+        console.warn(`⚠️ Skipping function property: ${key}`);
+      } else if (typeof value === 'object' && value.constructor && 
+                 !['Object', 'Array', 'Date', 'String', 'Number', 'Boolean'].includes(value.constructor.name)) {
+        console.warn(`⚠️ Skipping non-serializable object: ${key}`, value.constructor.name);
+      } else {
+        // Safe to include
+        serialized[key] = value;
+      }
+    }
+  });
   
   return serialized;
 }
@@ -163,20 +211,21 @@ function* selectPlaceSaga(action) {
       return;
     }
 
-    // 🔥 CRITICAL: FULLY serialize the place object
+    // 🔥 CRITICAL: FULLY serialize the place object including photos
     const fullySerializedPlace = serializePlaceObject(processedPlace);
 
     console.log('📍 Saga: Final serialized place ready:', {
       name: fullySerializedPlace.name,
       location: fullySerializedPlace.geometry?.location,
-      hasViewport: !!fullySerializedPlace.geometry?.viewport
+      hasViewport: !!fullySerializedPlace.geometry?.viewport,
+      photoCount: fullySerializedPlace.photos?.length || 0
     });
 
     // Add to search history with fully serialized data
     if (query && fullySerializedPlace) {
       yield put(addToSearchHistory({
         query: query.trim(),
-        place: fullySerializedPlace, // Now completely serialized
+        place: fullySerializedPlace, // Now completely serialized including photos
         timestamp: new Date().toISOString()
       }));
       console.log('📚 Saga: Added to search history');
@@ -222,7 +271,7 @@ function* debouncedSearchSaga(action) {
     const places = yield call([googleMapsService, 'searchPlaces'], query.trim());
     
     if (Array.isArray(places)) {
-      // 🔥 Serialize all search results completely
+      // 🔥 Serialize all search results completely including photos
       const serializedPlaces = places.map(place => serializePlaceObject(place));
       
       yield put(searchPlacesSuccess(serializedPlaces));

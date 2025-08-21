@@ -1,5 +1,5 @@
 // FIXED: src/hooks/useGoogleMaps.js
-// Stable auto-pinning without Redux serialization issues
+// Stable auto-pinning with coordinate validation
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSelector } from 'react-redux';
 import { googleMapsService } from '../services/googleMapsService';
@@ -17,6 +17,22 @@ export const useGoogleMaps = (containerId) => {
   
   // Get selected place from Redux (now with serialized data)
   const selectedPlace = useSelector(state => state.places.selectedPlace);
+
+  // 🔧 COORDINATE VALIDATION HELPER
+  const validateCoordinates = useCallback((coords) => {
+    if (!coords || typeof coords !== 'object') {
+      return false;
+    }
+    
+    const { lat, lng } = coords;
+    
+    return typeof lat === 'number' && 
+           typeof lng === 'number' && 
+           Number.isFinite(lat) && 
+           Number.isFinite(lng) &&
+           lat >= -90 && lat <= 90 &&
+           lng >= -180 && lng <= 180;
+  }, []);
 
   // 🔧 STABLE MAP INITIALIZATION - Fixed timing issues
   const initMap = useCallback(async () => {
@@ -44,9 +60,16 @@ export const useGoogleMaps = (containerId) => {
         throw new Error(`Map container '${containerId}' not found after ${attempts} attempts`);
       }
 
+      // 🔧 SAFE DEFAULT COORDINATES
+      const defaultCenter = { lat: 3.139, lng: 101.686 }; // Kuala Lumpur
+      
+      if (!validateCoordinates(defaultCenter)) {
+        throw new Error('Invalid default coordinates');
+      }
+
       // Initialize map with proper error handling
       const mapInstance = await googleMapsService.createMap(containerId, {
-        center: { lat: 3.139, lng: 101.686 }, // Kuala Lumpur default
+        center: defaultCenter,
         zoom: 11,
         mapTypeControl: true,
         streetViewControl: false,
@@ -73,7 +96,7 @@ export const useGoogleMaps = (containerId) => {
       mapInstanceRef.current = null;
       initializationAttempted.current = false; // Allow retry
     }
-  }, [containerId]);
+  }, [containerId, validateCoordinates]);
 
   // Initialize map on mount
   useEffect(() => {
@@ -89,7 +112,7 @@ export const useGoogleMaps = (containerId) => {
     return () => clearTimeout(initTimer);
   }, [containerId, map, initMap]);
 
-  // 🎯 FIXED AUTO-PINNING - Stable and efficient
+  // 🎯 FIXED AUTO-PINNING - With coordinate validation
   useEffect(() => {
     if (!map || !selectedPlace || !selectedPlace.geometry?.location) {
       return;
@@ -120,12 +143,28 @@ export const useGoogleMaps = (containerId) => {
 
       // Extract coordinates (now always serialized from Redux)
       const location = selectedPlace.geometry.location;
+      
+      // 🔧 CRITICAL: Validate coordinates before using them
+      if (!validateCoordinates(location)) {
+        console.warn('⚠️ useGoogleMaps: Invalid coordinates for auto-pinning:', location);
+        setError('Invalid coordinates for selected place');
+        return;
+      }
+
+      // Ensure coordinates are numbers
       const position = {
-        lat: location.lat,
-        lng: location.lng
+        lat: Number(location.lat),
+        lng: Number(location.lng)
       };
 
-      console.log('📍 useGoogleMaps: Pinning location:', position);
+      // Double-check after conversion
+      if (!validateCoordinates(position)) {
+        console.warn('⚠️ useGoogleMaps: Coordinates failed validation after conversion:', position);
+        setError('Unable to process place coordinates');
+        return;
+      }
+
+      console.log('📍 useGoogleMaps: Pinning validated location:', position);
 
       // Create new marker
       const marker = googleMapsService.createMarker(
@@ -137,9 +176,26 @@ export const useGoogleMaps = (containerId) => {
       if (marker) {
         markersRef.current.push(marker);
 
-        // Center map to new location
-        map.setCenter(position);
-        map.setZoom(15);
+        // 🔧 SAFE map centering with error handling
+        try {
+          map.setCenter(position);
+          map.setZoom(15);
+          console.log('✅ useGoogleMaps: Map centered successfully to:', position);
+        } catch (centerError) {
+          console.warn('⚠️ useGoogleMaps: Failed to center map:', centerError);
+          
+          // Try with validated default center as fallback
+          const fallbackCenter = { lat: 3.139, lng: 101.686 };
+          if (validateCoordinates(fallbackCenter)) {
+            try {
+              map.setCenter(fallbackCenter);
+              map.setZoom(11);
+              console.log('✅ useGoogleMaps: Used fallback center');
+            } catch (fallbackError) {
+              console.error('❌ useGoogleMaps: Fallback center also failed:', fallbackError);
+            }
+          }
+        }
 
         // Add subtle bounce animation
         if (window.google?.maps?.Animation?.BOUNCE) {
@@ -167,7 +223,7 @@ export const useGoogleMaps = (containerId) => {
       console.error('❌ useGoogleMaps: Auto-pinning failed:', error);
       setError(`Auto-pinning failed: ${error.message}`);
     }
-  }, [map, selectedPlace]); // Dependencies: map and selectedPlace
+  }, [map, selectedPlace, validateCoordinates]); // Added validateCoordinates to dependencies
 
   // Cleanup on unmount
   useEffect(() => {
@@ -196,16 +252,23 @@ export const useGoogleMaps = (containerId) => {
     map,
     isLoaded,
     error,
+    
     // Helper methods for external use
     addMarker: useCallback((position, title) => {
       if (!map) return null;
+      
+      // Validate coordinates before adding marker
+      if (!validateCoordinates(position)) {
+        console.warn('⚠️ useGoogleMaps: Invalid coordinates for addMarker:', position);
+        return null;
+      }
       
       const marker = googleMapsService.createMarker(map, position, title);
       if (marker) {
         markersRef.current.push(marker);
       }
       return marker;
-    }, [map]),
+    }, [map, validateCoordinates]),
     
     clearMarkers: useCallback(() => {
       markersRef.current.forEach(marker => {
@@ -221,10 +284,21 @@ export const useGoogleMaps = (containerId) => {
     }, []),
     
     centerMap: useCallback((position, zoom = 15) => {
-      if (map && position) {
+      if (!map || !position) return;
+      
+      // Validate coordinates before centering
+      if (!validateCoordinates(position)) {
+        console.warn('⚠️ useGoogleMaps: Invalid coordinates for centerMap:', position);
+        return;
+      }
+      
+      try {
         map.setCenter(position);
         map.setZoom(zoom);
+        console.log('✅ useGoogleMaps: Map centered via centerMap method');
+      } catch (error) {
+        console.error('❌ useGoogleMaps: centerMap failed:', error);
       }
-    }, [map])
+    }, [map, validateCoordinates])
   };
 };
