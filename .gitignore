@@ -13,3 +13,4 @@ web/.env.local
 scripts/ways.cache.json
 scripts/buildings.json
 scripts/raw.json
+scripts/names.cache.json

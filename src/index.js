@@ -101,7 +101,7 @@ async function handleApi(request, pathname, url, env) {
   // The pilot building — kept for deep-linking. Now a real `buildings` row.
   if (pathname === "/api/pilot") {
     const row = await env.DB
-      .prepare(`SELECT osm_id, name, levels, lat, lon, state, city FROM buildings WHERE osm_id = 961998795`)
+      .prepare(`SELECT osm_id, name, block, name_source, levels, lat, lon, state, city FROM buildings WHERE osm_id = 961998795`)
       .first();
     return json({ pilot: row ? decorateBuilding(row) : null });
   }
@@ -127,7 +127,7 @@ async function handleApi(request, pathname, url, env) {
     if (q && q.trim().length >= 2) { where.push("b.name LIKE ?"); binds.push(`%${q.trim()}%`); }
 
     const sql =
-      `SELECT b.osm_id, b.name, b.levels, b.lat, b.lon, b.state, b.city,
+      `SELECT b.osm_id, b.name, b.block, b.name_source, b.levels, b.lat, b.lon, b.state, b.city,
               COUNT(s.osm_id)                         AS source_count,
               SUM(CASE WHEN s.segment_id IS NOT NULL THEN 1 ELSE 0 END) AS live_count
          FROM buildings b
@@ -152,7 +152,7 @@ async function handleApi(request, pathname, url, env) {
   if (idMatch) {
     const osmId = Number(idMatch[1]);
     const row = await env.DB
-      .prepare(`SELECT osm_id, name, levels, lat, lon, state, city FROM buildings WHERE osm_id = ?`)
+      .prepare(`SELECT osm_id, name, block, name_source, levels, lat, lon, state, city FROM buildings WHERE osm_id = ?`)
       .bind(osmId)
       .first();
     if (!row) return json({ error: "not found" }, 404);
@@ -410,13 +410,31 @@ function decorateBuilding(row) {
   return {
     osm_id: row.osm_id,
     name: row.name,
+    block: row.block ?? null,
+    name_source: row.name_source ?? null,
     levels: row.levels,
     lat: row.lat,
     lon: row.lon,
     state: row.state,
     city: row.city,
-    label: row.name || `${row.levels ?? "?"}-storey block · ${row.city} (#${String(row.osm_id).slice(-6)})`,
+    label: buildingLabel(row),
   };
+}
+
+// A name that tells you nothing about the development: "A", "B2", "Block C".
+function isBareBlockName(name) {
+  if (!name) return true;
+  return /^(bloc?k|blok|blk|tower|menara|wing|fasa|phase)?\s*[-/]?\s*[a-z]?[-/]?\d{0,4}[a-z]?$/i.test(name.trim());
+}
+
+function buildingLabel(row) {
+  const storeys = row.levels ? `${row.levels}-storey` : "block";
+  const realName = row.name && !isBareBlockName(row.name) ? row.name : null;
+  if (realName && row.block) return `${realName} — ${row.block}`;
+  if (realName) return realName;
+  if (row.block) return `${row.block} · ${storeys} · ${row.city}`;
+  if (row.name) return `${row.name} · ${storeys} · ${row.city}`; // bare block name, no block col
+  return `${storeys} · ${row.city} (#${String(row.osm_id).slice(-6)})`;
 }
 
 function monitoringSummary(sourceCount, liveCount) {

@@ -53,6 +53,8 @@ npx wrangler d1 execute seenoise --file=./buildings_schema.sql --remote
 npx wrangler d1 execute seenoise --file=./buildings_seed.sql --remote
 npx wrangler d1 execute seenoise --file=./sources_schema.sql --remote
 npx wrangler d1 execute seenoise --file=./sources_seed.sql --remote   # building_sources + segments
+npx wrangler d1 execute seenoise --file=./buildings_names_schema.sql --remote
+npx wrangler d1 execute seenoise --file=./buildings_names_seed.sql --remote   # real building names
 
 # Store your TomTom key as a secret -- get your own key at
 # developer.tomtom.com with the "Traffic Flow API" product enabled,
