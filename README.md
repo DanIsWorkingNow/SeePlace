@@ -1,242 +1,129 @@
-# 🗺️ SeePlace - Advanced Google Places Explorer
+# SeeNoise
 
-> A production-ready React application showcasing advanced Redux Saga patterns with Google Places API and interactive maps integration.
+See CLAUDE.md first for full project context. This file is just the
+mechanical setup steps.
 
-![React](https://img.shields.io/badge/React-18.x-blue.svg)
-![Redux Saga](https://img.shields.io/badge/Redux_Saga-Advanced-green.svg)
-![Google Maps](https://img.shields.io/badge/Google_Maps-JavaScript_API-red.svg)
-![Tailwind](https://img.shields.io/badge/Tailwind-CSS-blue.svg)
-![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg)
+One Cloudflare Worker (`seenoise-collector`) does three things:
 
-## 🎯 Project Overview
+1. **Collector** — every 15 min, logs live traffic near Petalz Residences
+   (NPE + Jalan Klang Lama) plus the expected KTM train pass-by count for
+   that hour into Cloudflare D1.
+2. **API** — read-only `/api/*` JSON over the same D1 (buildings list,
+   pilot info, recent readings, 24-hour relative risk curve).
+3. **Frontend** — serves the React app in `web/` (building picker + map +
+   noise panel) via the `[assets]` binding.
 
-SeePlace is a sophisticated Google Places search application that demonstrates advanced React patterns, complex state management with Redux Saga, and seamless integration with Google Maps JavaScript API. Built with production-ready architecture and comprehensive error handling.
+See `docs/ADR-001-merge-seeplace-frontend.md` for how the frontend
+(formerly the separate SeePlace repo) was merged in.
 
-### 🏆 Key Achievements
+## Repo layout
 
-- **Advanced Redux Saga Patterns** - Complex async orchestration with debouncing and cancellation
-- **Production-Ready Architecture** - Scalable, maintainable codebase with enterprise patterns  
-- **Comprehensive Error Handling** - Error boundaries, user feedback, and recovery mechanisms
-- **Custom Debugging Tools** - Built-in debugging scripts for troubleshooting
-- **Performance Optimized** - Debounced search, memoization, and efficient re-renders
+```
+src/index.js          Worker: scheduled() collector + /api router + SPA host
+schema.sql etc.       D1 schema + seed (apply once, see below)
+web/                  React app (CRA / react-scripts) — the frontend
+wrangler.toml         Worker config; [assets] points at web/build
+package.json          root scripts: build / deploy / dev:*
+```
 
-## ✨ Features
+## Working on it
 
-### Core Functionality
-- 🔍 **Real-time Place Search** - Google Places Autocomplete with intelligent debouncing
-- 🗺️ **Interactive Maps** - Dynamic Google Maps with place markers and info windows
-- 📚 **Search History** - Persistent search history with Redux state management
-- 🎯 **Advanced State Management** - Redux Saga for complex async flows and side effects
-- 📱 **Responsive Design** - Mobile-first design with professional Tailwind CSS
-- ⌨️ **Accessibility** - Full keyboard navigation and ARIA support
-
-### Advanced Features
-- 🔧 **Built-in Debugging** - Comprehensive debugging tools for API integration
-- 🛡️ **Error Recovery** - Graceful error handling with user feedback
-- ⚡ **Performance Optimization** - Request cancellation and race condition handling
-- 🔄 **State Persistence** - Search history and application state management
-- 📊 **Professional UX** - Loading states, error boundaries, and smooth interactions
-
-## 🛠️ Tech Stack
-
-### Frontend Architecture
-- **React 18** - Modern functional components with hooks
-- **Redux Toolkit** - Simplified Redux state management  
-- **Redux Saga** - Advanced async flow control and side effects management
-- **Tailwind CSS** - Utility-first CSS framework with custom design system
-
-### Integration & Services
-- **Google Maps JavaScript API** - Maps and Places integration
-- **Custom Service Layer** - Abstracted API communications
-- **Advanced Hooks** - Reusable logic with `usePlaces`, `useDebounce`, `useGoogleMaps`
-
-### Development Patterns
-- **Functional Components** - Modern React with hooks throughout
-- **Custom Hooks** - Business logic separation and reusability
-- **ES6+ Features** - Arrow functions, destructuring, async/await patterns
-- **Error Boundaries** - Comprehensive error handling strategy
-- **Performance Optimization** - Memoization, debouncing, and efficient updates
-
-## 🚀 Quick Start
-
-### Prerequisites
 ```bash
-Node.js 16+ and npm 8+
-Google Cloud Platform account
-Google Maps API key with Places API enabled
+npm install            # root — also installs web/ deps (postinstall)
+
+# Two terminals for local dev:
+npm run dev:worker     # wrangler dev on :8787 (collector + /api, uses remote D1)
+npm run dev:web        # CRA dev server on :3000
+# set web/.env: REACT_APP_NOISE_API_BASE=http://localhost:8787
 ```
 
-### Installation & Setup
+## One-time setup
+
 ```bash
-# Clone the repository
-git clone https://github.com/DanIsWorkingNow/SeePlace.git
-cd SeePlace
+npx wrangler login
 
-# Install dependencies
-npm install
+# Create the D1 database
+npx wrangler d1 create seenoise
+# Copy the "database_id" from the output into wrangler.toml
 
-# Environment setup
-cp .env.example .env
-# Add your Google Maps API key to .env:
-# REACT_APP_GOOGLE_MAPS_API_KEY=your_api_key_here
+# Apply the schema and seed data (order matters)
+npx wrangler d1 execute seenoise --file=./schema.sql --remote
+npx wrangler d1 execute seenoise --file=./seed.sql --remote
+npx wrangler d1 execute seenoise --file=./buildings_schema.sql --remote
+npx wrangler d1 execute seenoise --file=./buildings_seed.sql --remote
 
-# Start development server
-npm start
+# Store your TomTom key as a secret -- get your own key at
+# developer.tomtom.com with the "Traffic Flow API" product enabled,
+# then run this and paste it when prompted. Never put the real key in
+# wrangler.toml, .dev.vars, or anywhere that might get committed.
+npx wrangler secret put TOMTOM_API_KEY
+
+# Optional: a secret to protect the manual /run test endpoint
+npx wrangler secret put TRIGGER_SECRET
 ```
 
-### Google Cloud Configuration
-1. Visit [Google Cloud Console](https://console.cloud.google.com/)
-2. Enable required APIs:
-   - Maps JavaScript API
-   - Places API  
-   - Places API (New)
-3. Create and configure API key with appropriate restrictions
-4. Add API key to your `.env` file
+Also set an HTTP-referrer restriction on the Google Maps API key for the
+deployed `*.workers.dev` domain (and `localhost` for dev).
 
-## 🏗️ Architecture
+For local development, copy `.dev.vars.example` to `.dev.vars` (already
+gitignored) and fill in your own key there instead of using secrets.
 
-### Project Structure
-```
-src/
-├── components/
-│   ├── PlaceSearchApp.js              # Main application container
-│   ├── PlaceAutocomplete/
-│   │   └── PlaceAutocomplete.js       # Search input with autocomplete
-│   ├── Map/
-│   │   └── MapContainer.js            # Google Maps integration
-│   ├── SearchHistory/
-│   │   ├── SearchHistory.js           # History list component
-│   │   └── SearchHistoryItem.js       # Individual history items
-│   └── common/
-│       ├── Header.js                  # Application header
-│       ├── LoadingSpinner.js          # Reusable loading component
-│       └── ErrorBoundary.js           # Error handling boundaries
-├── store/
-│   ├── index.js                       # Redux store configuration
-│   ├── slices/
-│   │   ├── placesSlice.js            # Places state management
-│   │   └── uiSlice.js                # UI state (loading, errors)
-│   └── sagas/
-│       ├── rootSaga.js               # Root saga orchestrator
-│       └── placesSaga.js             # Places-related async operations
-├── services/
-│   └── googleMapsService.js          # Google Maps API service layer
-├── hooks/
-│   ├── usePlaces.js                  # Places-related business logic
-│   ├── useDebounce.js                # Debouncing utility hook
-│   └── useGoogleMaps.js              # Google Maps integration hook
-└── styles/
-    └── globals.css                    # Global styles with Tailwind
-```
+## Deploy
 
-### Advanced Redux Saga Patterns
-
-**Implemented Patterns:**
-- **Debounced Search** - 300ms delay to prevent excessive API calls
-- **Request Cancellation** - Automatic cancellation of previous searches
-- **Complex Async Orchestration** - Multi-step operations with side effects
-- **Error Recovery** - Robust error handling with user feedback
-- **State Normalization** - Efficient state structure for complex data
-
-## 🧪 Testing & Debugging
-
-### Built-in Debug Tools
-The project includes comprehensive debugging tools for troubleshooting:
-
-```javascript
-// Open browser console and run the debug script
-// Validates API keys, DOM elements, Google Maps loading, and Redux state
-```
-
-**Debug Features:**
-- ✅ API key validation
-- ✅ DOM element verification  
-- ✅ Google Maps API loading status
-- ✅ Redux state inspection
-- ✅ Overall system health assessment
-
-### Development Commands
 ```bash
-npm start          # Development server
-npm test           # Run test suite
-npm run build      # Production build
-npm run analyze    # Bundle size analysis
+npm run deploy      # builds web/ then `wrangler deploy`
 ```
 
-## 🎯 Key Implementation Highlights
+The cron trigger in `wrangler.toml` starts firing every 15 minutes on
+Cloudflare's schedule automatically. `wrangler deploy` on its own works
+too but won't rebuild the frontend first.
 
-### Performance Optimizations
-- **Debounced Search** - Intelligent API call reduction
-- **Request Cancellation** - Race condition prevention
-- **Memoized Components** - Efficient re-rendering
-- **Lazy Loading** - On-demand resource loading
+## Test it immediately (without waiting for the cron)
 
-### User Experience
-- **Loading States** - Professional feedback during async operations
-- **Error Recovery** - Graceful error handling with retry mechanisms
-- **Keyboard Navigation** - Full accessibility support
-- **Responsive Design** - Seamless experience across all devices
-
-### Code Quality
-- **ES6+ Syntax** - Modern JavaScript patterns throughout
-- **Functional Programming** - Immutable state and pure functions
-- **Custom Hooks** - Reusable business logic
-- **Comprehensive Documentation** - Well-documented codebase
-
-## 🔧 Advanced Configuration
-
-### Environment Variables
-```env
-REACT_APP_GOOGLE_MAPS_API_KEY=your_google_maps_api_key
-REACT_APP_DEFAULT_LOCATION=Malaysia
+```bash
+curl.exe -X POST https://seenoise-collector.claudefyp11.workers.dev/run \
+  -H "x-trigger-key: <whatever you set TRIGGER_SECRET to>"
 ```
 
-### Google Maps API Setup
-Ensure your API key has the following APIs enabled:
-- Maps JavaScript API
-- Places API
-- Places API (New)
-- Geocoding API (optional)
+## API endpoints
 
-## 📚 Documentation & Resources
+```
+GET /api/health
+GET /api/meta/regions            state -> city list with counts
+GET /api/pilot                   Petalz Residences + monitored sources
+GET /api/buildings?state=&city=&q=&limit=
+GET /api/buildings/:osm_id
+GET /api/buildings/:osm_id/readings?hours=
+GET /api/readings?hours=         raw recent readings (pilot segments)
+GET /api/risk                    24-hour RELATIVE risk curve (uncalibrated)
+```
 
-### Project Resources
-- **Repository**: [GitHub - SeePlace](https://github.com/DanIsWorkingNow/SeePlace)
-- **Demo**: Live deployment coming soon
-- **Documentation**: Comprehensive inline documentation
+## Check what's been logged
 
-### External References
-- [Google Maps JavaScript API](https://developers.google.com/maps/documentation/javascript)
-- [Google Places API](https://developers.google.com/maps/documentation/places/web-service)
-- [Redux Saga Documentation](https://redux-saga.js.org/)
-- [Tailwind CSS](https://tailwindcss.com/)
+```bash
+wrangler d1 execute seenoise --remote \
+  --command="SELECT * FROM readings ORDER BY ts DESC LIMIT 20"
 
-## 🎉 Success Metrics
+wrangler d1 execute seenoise --remote \
+  --command="SELECT state, city, count(*) FROM buildings GROUP BY state, city ORDER BY count(*) DESC"
+```
 
-### Project Completion
-- ✅ **100% Core Requirements** - All assessment criteria met
-- ✅ **Advanced Features** - Beyond requirements implementation
-- ✅ **Production Ready** - Enterprise-level code quality
-- ✅ **Performance Optimized** - Sub-3-second load times
-- ✅ **Comprehensive Testing** - Built-in debugging and validation
+## Refreshing the train schedule later
 
-### Technical Achievements
-- Advanced Redux Saga pattern implementation
-- Complex Google Maps API integration
-- Professional error handling and recovery
-- Production-ready architecture and deployment
-- Comprehensive debugging and monitoring tools
+`train_hourly_pattern` is a static lookup, not something the Worker
+recomputes on its own (see CLAUDE.md for why). Re-pull the GTFS static
+feed, recompute the hourly histogram, regenerate seed.sql, then:
 
-## 🤝 Contributing
+```bash
+wrangler d1 execute seenoise --remote --file=./seed.sql
+```
 
-This project demonstrates advanced React and Redux patterns. For questions about the implementation or architecture decisions, please refer to the comprehensive documentation included in the project.
+## Notes
 
-## 📄 License
-
-This project is part of a technical assessment demonstrating advanced React and Redux Saga patterns.
-
----
-
-**🏆 Built with advanced React patterns and production-ready architecture**
-
-*Developed by DanIsWorkingNow - Showcasing expertise in modern React development, complex state management, and Google Maps API integration.*
+- Free-tier limits (D1: 5M row reads/day, 100K row writes/day, 5GB
+  storage; Workers: 100K requests/day) are all far above what this
+  project needs -- at 15-min intervals that's ~192 rows/day, and the
+  1,118-row building seed is a one-time write.
+- Cloudflare Cron Triggers don't auto-retry on failure. For a personal
+  data-logging project, a missed 15-minute sample now and then isn't a
+  big deal -- not worth adding retry infrastructure for.

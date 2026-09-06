@@ -1,0 +1,21 @@
+name = "seenoise-collector"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# Serves the built React app in web/. A request matching a built file is
+# returned directly; everything else invokes the Worker (which routes /run
+# and /api/*, then falls back to env.ASSETS for SPA client-side routes).
+# Run `npm run build` (root) before `wrangler deploy` so web/build exists.
+[assets]
+directory = "./web/build"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# Runs every 15 minutes. Change to "*/30 * * * *" for every 30 min.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[d1_databases]]
+binding = "DB"                      # accessed in code as env.DB
+database_name = "seenoise"
+database_id = "443b4e5f-766a-41b7-ae2f-b54d523d5802"

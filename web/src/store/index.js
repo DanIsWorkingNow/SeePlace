@@ -4,6 +4,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import createSagaMiddleware from 'redux-saga';
 import placesReducer from './slices/placesSlice';
 import uiReducer from './slices/uiSlice';
+import buildingsReducer from './slices/buildingsSlice';
 // import favoritesReducer from './slices/favoritesSlice'; // Uncomment if you have this
 import rootSaga from './sagas/rootSaga'; // Or replace with: import placesSaga from './sagas/placesSaga';
 
@@ -22,6 +23,7 @@ const store = configureStore({
   reducer: {
     places: placesReducer,
     ui: uiReducer,
+    buildings: buildingsReducer,
     // favorites: favoritesReducer, // Uncomment if you have favorites feature
   },
   
