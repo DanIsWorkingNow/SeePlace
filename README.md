@@ -51,6 +51,8 @@ npx wrangler d1 execute seenoise --file=./schema.sql --remote
 npx wrangler d1 execute seenoise --file=./seed.sql --remote
 npx wrangler d1 execute seenoise --file=./buildings_schema.sql --remote
 npx wrangler d1 execute seenoise --file=./buildings_seed.sql --remote
+npx wrangler d1 execute seenoise --file=./sources_schema.sql --remote
+npx wrangler d1 execute seenoise --file=./sources_seed.sql --remote   # building_sources + segments
 
 # Store your TomTom key as a secret -- get your own key at
 # developer.tomtom.com with the "Traffic Flow API" product enabled,
@@ -90,13 +92,30 @@ curl.exe -X POST https://seenoise-collector.claudefyp11.workers.dev/run \
 ```
 GET /api/health
 GET /api/meta/regions            state -> city list with counts
-GET /api/pilot                   Petalz Residences + monitored sources
-GET /api/buildings?state=&city=&q=&limit=
-GET /api/buildings/:osm_id
-GET /api/buildings/:osm_id/readings?hours=
-GET /api/readings?hours=         raw recent readings (pilot segments)
-GET /api/risk                    24-hour RELATIVE risk curve (uncalibrated)
+GET /api/pilot                   Petalz Residences (osm_id 961998795)
+GET /api/segments                the ~22 road segments polled for live traffic
+GET /api/buildings?state=&city=&q=&limit=   each row carries a `monitoring` summary
+GET /api/buildings/:osm_id       + nearby noise `sources`
+GET /api/buildings/:osm_id/readings?hours=  live readings for that building's segments
+GET /api/readings?hours=         raw recent readings (all polled segments)
+GET /api/risk?osm_id=            modelled 24-hour RELATIVE risk index for that building
 ```
+
+## Refreshing the per-building noise sources
+
+`building_sources` / `segments` come from OpenStreetMap via
+`scripts/enrich-sources.mjs` (run locally — Overpass parsing would blow the
+cron CPU budget). To rebuild:
+
+```bash
+npx wrangler d1 execute seenoise --remote --json \
+  --command="SELECT osm_id,name,levels,lat,lon,state,city FROM buildings" > scripts/raw.json
+# (extract the results array into scripts/buildings.json)
+node scripts/enrich-sources.mjs           # writes sources_schema.sql + sources_seed.sql
+npx wrangler d1 execute seenoise --file=./sources_seed.sql --remote
+```
+
+`scripts/ways.cache.json` caches the Overpass response — delete it to refetch.
 
 ## Check what's been logged
 

@@ -101,15 +101,15 @@ const BuildingPicker = () => {
           ))}
       </div>
 
-      {selected && (
+      {selected && selected.monitoring && (
         <div className="text-xs">
-          {selected.monitoring && selected.monitoring.available ? (
-            <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full">
-              Instrumented pilot — live noise data below
+          {selected.monitoring.live ? (
+            <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full">
+              Live traffic data nearby
             </span>
           ) : (
-            <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded-full">
-              No local monitoring yet for this building
+            <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-full">
+              Modelled from road/rail proximity
             </span>
           )}
         </div>

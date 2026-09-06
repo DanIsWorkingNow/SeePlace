@@ -34,21 +34,29 @@ export const noiseApi = {
   // { regions: [{ state, city, count }] }
   regions: () => get('/api/meta/regions'),
 
-  // { pilot: { id, name, lat, lon, levels, sources: [...] } }
+  // { pilot: { osm_id, name, label, lat, lon, levels, ... } }
   pilot: () => get('/api/pilot'),
 
-  // { buildings: [{ osm_id, name, label, levels, lat, lon, state, city }], count }
+  // { segments: [{ id, name, ref, road_class, lat, lon, building_count, last_polled }] }
+  segments: () => get('/api/segments'),
+
+  // { buildings: [{ osm_id, name, label, levels, lat, lon, state, city, monitoring }], count }
   buildings: ({ state, city, q, limit } = {}) =>
     get('/api/buildings', { state, city, q, limit }),
 
-  // { building: { ..., monitoring: { available, sources? , reason? } } }
+  // { building: { ..., sources: [...], monitoring: { available, live, note } } }
   building: (osmId) => get(`/api/buildings/${osmId}`),
 
-  // { hours, readings: [{ ts, segment, speed_ratio, train_passbys_this_hour, ... }] }
+  // recent raw readings (all polled segments)
   readings: ({ hours } = {}) => get('/api/readings', { hours }),
 
-  // { building, calibrated: false, hours: [{ hour, score, road_factor, train_factor, ... }] }
-  risk: () => get('/api/risk'),
+  // readings for the polled segments near one building
+  buildingReadings: (osmId, { hours } = {}) =>
+    get(`/api/buildings/${osmId}/readings`, { hours }),
+
+  // { osm_id, name, calibrated: false, sources, live_source_count,
+  //   hours: [{ hour, score, road_component, rail_component }] }
+  risk: (osmId) => get('/api/risk', { osm_id: osmId }),
 };
 
 export default noiseApi;

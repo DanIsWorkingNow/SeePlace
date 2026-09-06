@@ -8,3 +8,8 @@ web/.env.local
 *.sqlite
 *.sqlite3
 .DS_Store
+
+# enrich-sources.mjs working files (regenerable — see README)
+scripts/ways.cache.json
+scripts/buildings.json
+scripts/raw.json

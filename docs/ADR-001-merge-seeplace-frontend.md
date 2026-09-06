@@ -247,6 +247,6 @@ Still to do (not blocking):
 ## Open decisions
 
 1. **`/api/risk` formula.** What exactly combines `speed_ratio`, `train_passbys_this_hour`, and distance-to-source into the relative score? Needs its own short design note. Placeholder: normalized weighted sum, documented as uncalibrated.
-2. **Per-building segments.** `SEGMENTS` is a hardcoded 2-element array. Before the picker is useful beyond Petalz, this needs to become a `building_segments` table (osm_id → list of {name, lat, lon, class}) that the collector iterates. Separate work item.
-3. **Favorites.** Wire `favoritesSlice` to a real D1 `favorites` table now, or leave stubbed until there's auth? Leaning: leave stubbed — no user accounts yet.
+2. ~~**Per-building segments.**~~ **Done 2026-09-06.** `scripts/enrich-sources.mjs` pulls nearby roads/rail from OSM into `building_sources`; `segments` holds ~22 roads polled round-robin (8/run). `/api/risk?osm_id=` models any building. `SEGMENTS` array removed. Remaining: model weights are placeholders (#1 above); rail schedule is KTM-only; live traffic is 22 segments not per-building.
+3. **Favorites.** Wire `favoritesSlice` to a real D1 `favorites` table now, or leave stubbed until there's auth? Leaning: leave stubbed — no user accounts yet. Full port plan (from the SeePlaceFullstack Spring/MSSQL backend) written up in `docs/favorites-d1-migration.md` — do NOT merge that Java backend; port the one table + 5 routes to D1.
 4. **Custom domain** vs. `*.workers.dev` for launch.

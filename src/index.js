@@ -1,86 +1,83 @@
 // SeeNoise Worker — data collector + read-only API + static frontend host
 //
-// Three responsibilities, one deployment:
-//   1. scheduled()  — every 15 min (see wrangler.toml), pulls TomTom Traffic
-//      Flow for the road segments near Petalz Residences, looks up the KTM
-//      train pass-by count for the hour, logs one row per segment to D1.
-//   2. fetch() /api/* — read-only JSON over the same D1 database, for the
-//      React frontend in web/.
-//   3. fetch() everything else — serves the built React SPA via the [assets]
-//      binding (env.ASSETS), with index.html fallback for client-side routes.
+//   1. scheduled()  — every 15 min (see wrangler.toml). Polls TomTom Traffic
+//      Flow for a rotating batch of road segments from the `segments` table
+//      (not a hardcoded list any more), records one `readings` row each, and
+//      stamps `segments.last_polled`.
+//   2. fetch() /api/* — read-only JSON over D1: region list, building search,
+//      per-building noise-source list, and a modelled 24-hour noise-risk
+//      index for ANY building (not just the pilot).
+//   3. fetch() everything else — serves the built React SPA (env.ASSETS).
 //
-// Deliberately lightweight collector: no GTFS parsing happens in scheduled()
-// (that would blow past the Workers Free plan's 10ms CPU budget for a cron
-// invocation). train_hourly_pattern is a small static lookup, refreshed
-// separately and rarely — see seed.sql / README.md. The /api/* handlers run
-// on the normal request path, which is NOT on the cron CPU budget, but they
-// are still all single-statement SELECTs — keep them that way.
+// No GTFS parsing here (cron CPU budget — see CLAUDE.md). The 15-min job does
+// a bounded number of fetches + a D1 batch. `/api/*` handlers are all single
+// SELECTs on the request path (not the cron budget), keep them that way.
 
-const SEGMENTS = [
-  { name: "NPE (New Pantai Expressway)", lat: 3.0833212, lon: 101.6611416 },
-  { name: "Jalan Klang Lama", lat: 3.0835053, lon: 101.6614847 },
+// How many segments to sample per cron run. segments.poll=1 rows are polled
+// round-robin by last_polled, so each is sampled about every
+// (segment_count / BATCH) * 15 min. Keeps well under the TomTom free tier and
+// the cron CPU budget. Bump if you move to the Workers paid plan.
+const SEGMENTS_PER_RUN = 8;
+
+// ---- noise model constants (see /api/risk; ADR-001 open decision #1) --------
+
+// Relative source loudness by road class / rail type, 0..1. Rough ordering
+// from strategic-noise-mapping literature, NOT calibrated dB.
+const ROAD_BASE = { motorway: 1.0, trunk: 0.82, primary: 0.66, secondary: 0.5, tertiary: 0.34 };
+const RAIL_BASE = { rail: 0.72, light_rail: 0.62, monorail: 0.5, subway: 0.28 };
+
+// Line-source distance attenuation: 1.0 at <=15 m, → 0 at >=300 m.
+function atten(d) {
+  const REF = 15, MAX = 300;
+  if (d <= REF) return 1;
+  if (d >= MAX) return 0;
+  return 1 - Math.log10(d / REF) / Math.log10(MAX / REF);
+}
+
+// Standard diurnal road-traffic loudness, 0..1, indexed by Malaysia local hour.
+// Used where we have no live speed data for a segment.
+const ROAD_DIURNAL = [
+  0.25, 0.18, 0.15, 0.15, 0.22, 0.40, 0.70, 0.95, 1.00, 0.85, 0.78, 0.78,
+  0.80, 0.78, 0.78, 0.82, 0.88, 1.00, 0.98, 0.90, 0.75, 0.60, 0.45, 0.32,
 ];
-
-// The pilot building. Petalz Residences is NOT in the OSM `buildings` table
-// (it has no `building:levels` tag, so the seed query skipped it), so it is
-// described here explicitly. Distances are the measured source distances from
-// CLAUDE.md. This is the only location with real logged `readings` data.
-const PILOT = {
-  id: "petalz",
-  name: "Petalz Residences",
-  address: "Jalan Klang Lama, Kuala Lumpur",
-  lat: 3.0843233,
-  lon: 101.6613956,
-  levels: 34,
-  sources: [
-    { kind: "rail", name: "KTM Port Klang line", distance_m: 89, segment: null },
-    { kind: "road", name: "Jalan Klang Lama (B14)", distance_m: 91, segment: "Jalan Klang Lama" },
-    { kind: "motorway", name: "New Pantai Expressway (E10)", distance_m: 95, segment: "NPE (New Pantai Expressway)" },
-  ],
-};
-
-const MAX_TRAIN_PASSBYS = 8; // busiest hour in train_hourly_pattern, for normalising
+// Diurnal transit-frequency proxy for LRT/MRT/monorail (no schedule table yet).
+const TRANSIT_DIURNAL = [
+  0.05, 0.0, 0.0, 0.0, 0.0, 0.3, 0.7, 1.0, 1.0, 0.7, 0.6, 0.6,
+  0.6, 0.6, 0.6, 0.7, 0.85, 1.0, 1.0, 0.8, 0.6, 0.5, 0.35, 0.15,
+];
+const MAX_TRAIN_PASSBYS = 8; // busiest hour in train_hourly_pattern
 
 export default {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(collectReading(env));
+    ctx.waitUntil(collectReadings(env));
   },
 
   async fetch(request, env) {
     const url = new URL(request.url);
     const { pathname } = url;
 
-    // --- manual collector trigger (unchanged) ---------------------------------
     if (pathname === "/run") {
       const key = request.headers.get("x-trigger-key");
       if (!env.TRIGGER_SECRET || key !== env.TRIGGER_SECRET) {
         return new Response("Forbidden", { status: 403 });
       }
-      const results = await collectReading(env);
-      return json(results);
+      return json(await collectReadings(env));
     }
 
-    // --- read-only JSON API --------------------------------------------------
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       if (request.method === "OPTIONS") return withCors(new Response(null, { status: 204 }));
       try {
-        const res = await handleApi(pathname, url, env);
-        return withCors(res);
+        return withCors(await handleApi(request, pathname, url, env));
       } catch (err) {
         console.log("API error:", err.message);
         return withCors(json({ error: "internal error" }, 500));
       }
     }
 
-    // --- static React SPA --------------------------------------------------
-    if (env.ASSETS) {
-      return env.ASSETS.fetch(request);
-    }
-    // wrangler dev without a build present, or assets binding missing
-    return new Response(
-      "SeeNoise Worker is running. API under /api/*. Build web/ and deploy to serve the app.",
-      { headers: { "content-type": "text/plain" } }
-    );
+    if (env.ASSETS) return env.ASSETS.fetch(request);
+    return new Response("SeeNoise Worker is running. API under /api/*.", {
+      headers: { "content-type": "text/plain" },
+    });
   },
 };
 
@@ -88,31 +85,35 @@ export default {
 // API router
 // ---------------------------------------------------------------------------
 
-async function handleApi(pathname, url, env) {
-  // GET /api/health
+async function handleApi(request, pathname, url, env) {
   if (pathname === "/api/health") {
     return json({ ok: true, ts: new Date().toISOString() });
   }
 
-  // GET /api/meta/regions  ->  [{ state, city, count }]
   if (pathname === "/api/meta/regions") {
     const { results } = await env.DB
-      .prepare(
-        `SELECT state, city, COUNT(*) AS count
-           FROM buildings
-          GROUP BY state, city
-          ORDER BY state, city`
-      )
+      .prepare(`SELECT state, city, COUNT(*) AS count FROM buildings
+                GROUP BY state, city ORDER BY state, city`)
       .all();
     return json({ regions: results });
   }
 
-  // GET /api/pilot  ->  the Petalz pilot building + its monitored sources
+  // The pilot building — kept for deep-linking. Now a real `buildings` row.
   if (pathname === "/api/pilot") {
-    return json({ pilot: PILOT });
+    const row = await env.DB
+      .prepare(`SELECT osm_id, name, levels, lat, lon, state, city FROM buildings WHERE osm_id = 961998795`)
+      .first();
+    return json({ pilot: row ? decorateBuilding(row) : null });
   }
 
-  // GET /api/buildings?state=&city=&q=&limit=
+  if (pathname === "/api/segments") {
+    const { results } = await env.DB
+      .prepare(`SELECT id, name, ref, road_class, lat, lon, poll, building_count, last_polled
+                  FROM segments ORDER BY building_count DESC`)
+      .all();
+    return json({ segments: results });
+  }
+
   if (pathname === "/api/buildings") {
     const state = url.searchParams.get("state");
     const city = url.searchParams.get("city");
@@ -121,166 +122,209 @@ async function handleApi(pathname, url, env) {
 
     const where = [];
     const binds = [];
-    if (state) { where.push("state = ?"); binds.push(state); }
-    if (city) { where.push("city = ?"); binds.push(city); }
-    if (q && q.trim().length >= 2) { where.push("name LIKE ?"); binds.push(`%${q.trim()}%`); }
+    if (state) { where.push("b.state = ?"); binds.push(state); }
+    if (city) { where.push("b.city = ?"); binds.push(city); }
+    if (q && q.trim().length >= 2) { where.push("b.name LIKE ?"); binds.push(`%${q.trim()}%`); }
 
     const sql =
-      `SELECT osm_id, name, levels, lat, lon, state, city
-         FROM buildings
+      `SELECT b.osm_id, b.name, b.levels, b.lat, b.lon, b.state, b.city,
+              COUNT(s.osm_id)                         AS source_count,
+              SUM(CASE WHEN s.segment_id IS NOT NULL THEN 1 ELSE 0 END) AS live_count
+         FROM buildings b
+         LEFT JOIN building_sources s ON s.osm_id = b.osm_id
         ${where.length ? "WHERE " + where.join(" AND ") : ""}
-        ORDER BY (name IS NULL), name
+        GROUP BY b.osm_id
+        ORDER BY (b.name IS NULL), b.name
         LIMIT ?`;
     binds.push(limit);
 
     const { results } = await env.DB.prepare(sql).bind(...binds).all();
-    return json({ buildings: results.map(decorateBuilding), count: results.length });
-  }
-
-  // GET /api/buildings/:osm_id
-  const buildingMatch = pathname.match(/^\/api\/buildings\/(\d+)$/);
-  if (buildingMatch) {
-    const row = await env.DB
-      .prepare(`SELECT osm_id, name, levels, lat, lon, state, city FROM buildings WHERE osm_id = ?`)
-      .bind(Number(buildingMatch[1]))
-      .first();
-    if (!row) return json({ error: "not found" }, 404);
-    return json({ building: { ...decorateBuilding(row), monitoring: monitoringFor(row) } });
-  }
-
-  // GET /api/buildings/:osm_id/readings  — currently pilot-only (readings are
-  // logged for the Petalz segments only), so this returns the shared readings
-  // with a note when the building isn't the pilot.
-  const readingsMatch = pathname.match(/^\/api\/buildings\/(\d+)\/readings$/);
-  if (readingsMatch) {
-    const hours = clampInt(url.searchParams.get("hours"), 48, 1, 24 * 14);
-    const readings = await recentReadings(env, hours);
     return json({
-      osm_id: Number(readingsMatch[1]),
-      monitored: false,
-      note: "Traffic/train readings are currently logged for the Petalz Residences pilot segments only. See /api/readings and /api/risk.",
-      readings,
+      buildings: results.map((r) => ({
+        ...decorateBuilding(r),
+        monitoring: monitoringSummary(r.source_count, r.live_count),
+      })),
+      count: results.length,
     });
   }
 
-  // GET /api/readings?hours=48  — raw recent readings (all Petalz segments)
-  if (pathname === "/api/readings") {
-    const hours = clampInt(url.searchParams.get("hours"), 48, 1, 24 * 14);
-    return json({ hours, readings: await recentReadings(env, hours) });
+  const idMatch = pathname.match(/^\/api\/buildings\/(\d+)$/);
+  if (idMatch) {
+    const osmId = Number(idMatch[1]);
+    const row = await env.DB
+      .prepare(`SELECT osm_id, name, levels, lat, lon, state, city FROM buildings WHERE osm_id = ?`)
+      .bind(osmId)
+      .first();
+    if (!row) return json({ error: "not found" }, 404);
+    const { results: sources } = await env.DB
+      .prepare(`SELECT kind, class, name, ref, distance_m, segment_id
+                  FROM building_sources WHERE osm_id = ? ORDER BY distance_m`)
+      .bind(osmId)
+      .all();
+    const live = sources.filter((s) => s.segment_id != null).length;
+    return json({
+      building: {
+        ...decorateBuilding(row),
+        sources,
+        monitoring: monitoringSummary(sources.length, live),
+      },
+    });
   }
 
-  // GET /api/risk  — 24-hour RELATIVE noise-risk indicator for the pilot.
-  // NOT a calibrated dB(A) value. See CLAUDE.md.
+  const readingsMatch = pathname.match(/^\/api\/buildings\/(\d+)\/readings$/);
+  if (readingsMatch) {
+    const osmId = Number(readingsMatch[1]);
+    const hours = clampInt(url.searchParams.get("hours"), 72, 1, 24 * 14);
+    const since = isoHoursAgo(hours);
+    const { results } = await env.DB
+      .prepare(
+        `SELECT r.ts, r.segment, r.segment_id, r.current_speed, r.free_flow_speed,
+                r.speed_ratio, r.train_passbys_this_hour
+           FROM readings r
+          WHERE r.ts >= ?
+            AND r.segment_id IN (
+                  SELECT segment_id FROM building_sources
+                   WHERE osm_id = ? AND segment_id IS NOT NULL)
+          ORDER BY r.ts DESC`
+      )
+      .bind(since, osmId)
+      .all();
+    return json({ osm_id: osmId, hours, readings: results });
+  }
+
+  if (pathname === "/api/readings") {
+    const hours = clampInt(url.searchParams.get("hours"), 48, 1, 24 * 14);
+    const { results } = await env.DB
+      .prepare(
+        `SELECT ts, segment, segment_id, current_speed, free_flow_speed,
+                speed_ratio, confidence, road_closure, train_passbys_this_hour
+           FROM readings WHERE ts >= ? ORDER BY ts DESC`
+      )
+      .bind(isoHoursAgo(hours))
+      .all();
+    return json({ hours, readings: results });
+  }
+
+  // GET /api/risk?osm_id=NNN  — modelled 24-hour RELATIVE noise-risk index
+  // (0..100) for ANY building. NOT calibrated dB(A). See CLAUDE.md.
   if (pathname === "/api/risk") {
-    return json(await pilotRisk(env));
+    const osmId = Number(url.searchParams.get("osm_id"));
+    if (!osmId) return json({ error: "osm_id query param required" }, 400);
+    return json(await buildingRisk(env, osmId));
   }
 
   return json({ error: "unknown endpoint" }, 404);
 }
 
 // ---------------------------------------------------------------------------
-// Data helpers
+// Noise-risk model
 // ---------------------------------------------------------------------------
 
-function decorateBuilding(row) {
-  return {
-    ...row,
-    label: row.name || `${row.levels ?? "?"}-storey block · ${row.city} (#${String(row.osm_id).slice(-6)})`,
-  };
-}
+async function buildingRisk(env, osmId) {
+  const building = await env.DB
+    .prepare(`SELECT osm_id, name, levels, lat, lon FROM buildings WHERE osm_id = ?`)
+    .bind(osmId)
+    .first();
+  if (!building) return { error: "building not found" };
 
-// Only the pilot has monitored road/rail segments right now.
-function monitoringFor(row) {
-  const d = haversine(row.lat, row.lon, PILOT.lat, PILOT.lon);
-  if (d < 60) {
-    return { available: true, kind: "pilot", sources: PILOT.sources };
+  const { results: sources } = await env.DB
+    .prepare(`SELECT kind, class, name, ref, distance_m, segment_id
+                FROM building_sources WHERE osm_id = ? ORDER BY distance_m`)
+    .bind(osmId)
+    .all();
+
+  // live avg speed_ratio per (segment_id, MYT hour) for this building's segments
+  const segIds = [...new Set(sources.map((s) => s.segment_id).filter((x) => x != null))];
+  const liveBySeg = new Map(); // segment_id -> { [hour]: avgRatio }
+  if (segIds.length) {
+    const placeholders = segIds.map(() => "?").join(",");
+    const { results } = await env.DB
+      .prepare(
+        `SELECT segment_id,
+                CAST((CAST(strftime('%H', ts) AS INTEGER) + 8) % 24 AS INTEGER) AS myt_hour,
+                AVG(speed_ratio) AS avg_ratio
+           FROM readings
+          WHERE segment_id IN (${placeholders}) AND speed_ratio IS NOT NULL
+          GROUP BY segment_id, myt_hour`
+      )
+      .bind(...segIds)
+      .all();
+    for (const r of results) {
+      if (!liveBySeg.has(r.segment_id)) liveBySeg.set(r.segment_id, {});
+      liveBySeg.get(r.segment_id)[r.myt_hour] = r.avg_ratio;
+    }
   }
-  return {
-    available: false,
-    reason: "No monitored road/rail segments near this building yet. Only the Petalz Residences pilot is instrumented.",
-  };
-}
-
-async function recentReadings(env, hours) {
-  const since = new Date(Date.now() - hours * 3600 * 1000).toISOString();
-  const { results } = await env.DB
-    .prepare(
-      `SELECT ts, segment, current_speed, free_flow_speed, speed_ratio,
-              confidence, road_closure, train_passbys_this_hour
-         FROM readings
-        WHERE ts >= ?
-        ORDER BY ts DESC`
-    )
-    .bind(since)
-    .all();
-  return results;
-}
-
-// Relative noise-risk indicator, 0..1, per hour of day (Malaysia local time).
-// PLACEHOLDER FORMULA — see ADR-001 open decision #1. Blends:
-//   roadFactor  = 1 - mean(speed_ratio) for that hour  (congestion proxy)
-//   trainFactor = train pass-bys that hour / MAX_TRAIN_PASSBYS
-// weighted 0.5 / 0.5. Explicitly uncalibrated.
-async function pilotRisk(env) {
-  const { results: readingRows } = await env.DB
-    .prepare(
-      `SELECT CAST((CAST(strftime('%H', ts) AS INTEGER) + 8) % 24 AS INTEGER) AS myt_hour,
-              AVG(speed_ratio) AS avg_ratio,
-              COUNT(*) AS samples
-         FROM readings
-        WHERE speed_ratio IS NOT NULL
-        GROUP BY myt_hour`
-    )
-    .all();
 
   const { results: trainRows } = await env.DB
     .prepare(`SELECT hour, passbys FROM train_hourly_pattern`)
     .all();
-
-  const ratioByHour = new Map(readingRows.map((r) => [r.myt_hour, r]));
   const trainByHour = new Map(trainRows.map((r) => [r.hour, r.passbys]));
-
-  const W_ROAD = 0.5;
-  const W_TRAIN = 0.5;
 
   const hours = [];
   for (let h = 0; h < 24; h++) {
-    const r = ratioByHour.get(h);
-    const passbys = trainByHour.get(h) ?? 0;
-    const roadFactor = r && r.avg_ratio != null ? clamp(1 - r.avg_ratio, 0, 1) : null;
-    const trainFactor = clamp(passbys / MAX_TRAIN_PASSBYS, 0, 1);
-    const score =
-      roadFactor == null
-        ? W_TRAIN * trainFactor // no traffic data yet for this hour
-        : W_ROAD * roadFactor + W_TRAIN * trainFactor;
+    let roadComp = 0;
+    let railComp = 0;
+    for (const s of sources) {
+      const a = atten(s.distance_m);
+      if (a <= 0) continue;
+      if (s.kind === "road") {
+        const base = ROAD_BASE[s.class] ?? 0.3;
+        const live = s.segment_id != null ? liveBySeg.get(s.segment_id)?.[h] : undefined;
+        // slower traffic (low ratio) => stop-go => noisier; blend to a floor of 0.5
+        const tf = live != null ? clamp(0.5 + 0.5 * (1 - live), 0.2, 1) : ROAD_DIURNAL[h];
+        roadComp = combine(roadComp, base * a * tf);
+      } else {
+        const base = RAIL_BASE[s.class] ?? 0.5;
+        let tf;
+        if (s.class === "rail") {
+          tf = (trainByHour.get(h) ?? 0) / MAX_TRAIN_PASSBYS; // KTM schedule
+        } else {
+          tf = TRANSIT_DIURNAL[h]; // LRT/MRT/monorail — no schedule table yet
+        }
+        railComp = combine(railComp, base * a * tf);
+      }
+    }
+    const score = 100 * combine(roadComp, railComp);
     hours.push({
       hour: h,
-      score: round2(score),
-      road_factor: roadFactor == null ? null : round2(roadFactor),
-      train_factor: round2(trainFactor),
-      train_passbys: passbys,
-      traffic_samples: r ? r.samples : 0,
+      score: round1(score),
+      road_component: round1(100 * roadComp),
+      rail_component: round1(100 * railComp),
     });
   }
 
+  const liveCount = sources.filter((s) => s.segment_id != null).length;
   return {
-    building: PILOT.name,
+    osm_id: building.osm_id,
+    name: building.name,
+    levels: building.levels,
     calibrated: false,
-    note: "Relative indicator only, not decibels. Placeholder formula (0.5 road congestion + 0.5 normalised train frequency). See ADR-001.",
+    model:
+      "Relative index 0-100. Per source: base(road class | rail type) x distance attenuation x " +
+      "(live speed ratio where available, else diurnal profile | KTM train frequency). " +
+      "Sources combined as 1-prod(1-c). Not decibels. Placeholder weights - see ADR-001.",
+    sources: sources.map((s) => ({
+      kind: s.kind, class: s.class, name: s.name, ref: s.ref,
+      distance_m: s.distance_m, live: s.segment_id != null,
+    })),
+    live_source_count: liveCount,
     generated_at: new Date().toISOString(),
     hours,
   };
 }
 
+// probabilistic OR — saturating combine of two 0..1 factors
+function combine(a, b) {
+  return 1 - (1 - a) * (1 - b);
+}
+
 // ---------------------------------------------------------------------------
-// Collector (unchanged behaviour)
+// Collector
 // ---------------------------------------------------------------------------
 
-async function collectReading(env) {
+async function collectReadings(env) {
   const now = new Date();
   const ts = now.toISOString();
-
-  // Malaysia is UTC+8, no DST.
   const mytHour = (now.getUTCHours() + 8) % 24;
 
   let passbys = null;
@@ -294,47 +338,52 @@ async function collectReading(env) {
     console.log("train_hourly_pattern lookup failed:", err.message);
   }
 
-  const results = [];
+  // round-robin: least-recently-polled segments first
+  const { results: segs } = await env.DB
+    .prepare(
+      `SELECT id, name, ref, road_class, lat, lon
+         FROM segments
+        WHERE poll = 1
+        ORDER BY (last_polled IS NULL) DESC, last_polled ASC
+        LIMIT ?`
+    )
+    .bind(SEGMENTS_PER_RUN)
+    .all();
 
-  for (const seg of SEGMENTS) {
+  const results = [];
+  const inserts = [];
+
+  for (const seg of segs) {
     try {
       const flowUrl =
         `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json` +
         `?point=${seg.lat},${seg.lon}&unit=KMPH&key=${env.TOMTOM_API_KEY}`;
-
       const res = await fetch(flowUrl);
       if (!res.ok) {
         console.log(`TomTom error for ${seg.name}: ${res.status}`);
         results.push({ segment: seg.name, error: `HTTP ${res.status}` });
         continue;
       }
-
-      const body = await res.json();
-      const d = body.flowSegmentData;
+      const d = (await res.json()).flowSegmentData;
       const speedRatio = d.freeFlowSpeed ? d.currentSpeed / d.freeFlowSpeed : null;
 
-      await env.DB
-        .prepare(
-          `INSERT INTO readings
-            (ts, segment, lat, lon, frc, current_speed, free_flow_speed,
-             speed_ratio, confidence, road_closure, train_passbys_this_hour)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          ts,
-          seg.name,
-          seg.lat,
-          seg.lon,
-          d.frc ?? null,
-          d.currentSpeed ?? null,
-          d.freeFlowSpeed ?? null,
-          speedRatio,
-          d.confidence ?? null,
-          d.roadClosure ? 1 : 0,
-          passbys
-        )
-        .run();
-
+      inserts.push(
+        env.DB
+          .prepare(
+            `INSERT INTO readings
+               (ts, segment, segment_id, lat, lon, frc, current_speed, free_flow_speed,
+                speed_ratio, confidence, road_closure, train_passbys_this_hour)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            ts, seg.name, seg.id, seg.lat, seg.lon,
+            d.frc ?? null, d.currentSpeed ?? null, d.freeFlowSpeed ?? null,
+            speedRatio, d.confidence ?? null, d.roadClosure ? 1 : 0, passbys
+          )
+      );
+      inserts.push(
+        env.DB.prepare(`UPDATE segments SET last_polled = ? WHERE id = ?`).bind(ts, seg.id)
+      );
       results.push({ segment: seg.name, currentSpeed: d.currentSpeed, freeFlowSpeed: d.freeFlowSpeed, speedRatio });
     } catch (err) {
       console.log(`Error collecting ${seg.name}:`, err.message);
@@ -342,12 +391,55 @@ async function collectReading(env) {
     }
   }
 
-  return { ts, mytHour, passbys, results };
+  if (inserts.length) {
+    try {
+      await env.DB.batch(inserts);
+    } catch (err) {
+      console.log("D1 batch write failed:", err.message);
+    }
+  }
+
+  return { ts, mytHour, passbys, polled: segs.length, results };
 }
 
 // ---------------------------------------------------------------------------
-// Small utilities
+// Utilities
 // ---------------------------------------------------------------------------
+
+function decorateBuilding(row) {
+  return {
+    osm_id: row.osm_id,
+    name: row.name,
+    levels: row.levels,
+    lat: row.lat,
+    lon: row.lon,
+    state: row.state,
+    city: row.city,
+    label: row.name || `${row.levels ?? "?"}-storey block · ${row.city} (#${String(row.osm_id).slice(-6)})`,
+  };
+}
+
+function monitoringSummary(sourceCount, liveCount) {
+  const n = Number(sourceCount) || 0;
+  const live = Number(liveCount) || 0;
+  if (n === 0) {
+    return {
+      available: true,
+      modelled: true,
+      live: false,
+      note: "No motorway, trunk, primary/secondary road or rail within 300 m — modelled traffic-noise exposure is low.",
+    };
+  }
+  return {
+    available: true,
+    modelled: true,
+    live: live > 0,
+    live_source_count: live,
+    note: live > 0
+      ? "Modelled from nearby road/rail; some sources have live traffic data."
+      : "Modelled from nearby road/rail proximity and a standard diurnal traffic profile (no live segment nearby yet).",
+  };
+}
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
@@ -356,14 +448,16 @@ function json(data, status = 200) {
   });
 }
 
-// The API serves public, read-only data. CORS is open so the CRA dev server
-// (localhost:3000) can call `wrangler dev` (localhost:8787) during development.
 function withCors(res) {
   const h = new Headers(res.headers);
   h.set("access-control-allow-origin", "*");
   h.set("access-control-allow-methods", "GET, OPTIONS");
   h.set("access-control-allow-headers", "content-type");
   return new Response(res.body, { status: res.status, headers: h });
+}
+
+function isoHoursAgo(h) {
+  return new Date(Date.now() - h * 3600 * 1000).toISOString();
 }
 
 function clampInt(raw, fallback, min, max) {
@@ -376,17 +470,6 @@ function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n));
 }
 
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
-
-function haversine(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const toRad = (d) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
+function round1(n) {
+  return Math.round(n * 10) / 10;
 }

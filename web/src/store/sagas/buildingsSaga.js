@@ -61,23 +61,25 @@ function* selectBuildingSaga(action) {
     // Pin on the map immediately using the coords we already have.
     yield put(selectPlace({ place: toPlace(summary), query: '' }));
 
-    // Fetch the full record (adds `monitoring`).
+    // Fetch the full record (adds `sources` + `monitoring`).
     const { building } = yield call(noiseApi.building, summary.osm_id);
     yield put(selectBuildingSuccess(building));
 
     // Kick off noise data load for the panel.
-    yield put(loadNoiseRequest());
+    yield put(loadNoiseRequest(summary.osm_id));
   } catch (err) {
     yield put(buildingsFailure(err.message));
     yield put(setError('Could not load that building.'));
   }
 }
 
-function* loadNoiseSaga() {
+function* loadNoiseSaga(action) {
   try {
+    const osmId = action.payload ?? (yield select((s) => s.buildings.selected?.osm_id));
+    if (!osmId) return;
     const [risk, readingsResp] = yield all([
-      call(noiseApi.risk),
-      call(noiseApi.readings, { hours: 72 }),
+      call(noiseApi.risk, osmId),
+      call(noiseApi.buildingReadings, osmId, { hours: 72 }),
     ]);
     yield put(loadNoiseSuccess({ risk, readings: readingsResp.readings }));
   } catch (err) {
