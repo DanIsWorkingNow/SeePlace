@@ -70,7 +70,9 @@ const BuildingPicker = () => {
         autoComplete="off"
       />
 
-      <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-72 overflow-y-auto">
+      {/* Desktop caps its own height; on mobile the bottom sheet does the
+          scrolling, so the list flows naturally. */}
+      <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 md:max-h-72 md:overflow-y-auto">
         {loading.list && (
           <div className="p-4 flex justify-center">
             <LoadingSpinner size="sm" />
@@ -88,7 +90,7 @@ const BuildingPicker = () => {
             <button
               key={b.osm_id}
               onClick={() => selectBuilding(b)}
-              className={`w-full text-left p-3 hover:bg-blue-50 transition-colors ${
+              className={`w-full text-left p-3 min-h-touch hover:bg-blue-50 active:bg-blue-100 transition-colors ${
                 selected && selected.osm_id === b.osm_id ? 'bg-blue-50' : ''
               }`}
             >
